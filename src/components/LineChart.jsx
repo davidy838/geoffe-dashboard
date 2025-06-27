@@ -48,12 +48,12 @@ const LineChart = ({ isCustomLineColors = false, isDashboard = false }) => {
       xScale={{ type: "point" }}
       yScale={{
         type: "linear",
-        min: "auto",
+        min: 0,
         max: "auto",
-        stacked: true,
+        stacked: false,
         reverse: false,
       }}
-      yFormat=" >-.2f"
+      yFormat=" >-.0f"
       curve="catmullRom"
       axisTop={null}
       axisRight={null}
@@ -68,16 +68,15 @@ const LineChart = ({ isCustomLineColors = false, isDashboard = false }) => {
       }}
       axisLeft={{
         orient: "left",
-        tickValues: 5, // added
         tickSize: 3,
         tickPadding: 5,
         tickRotation: 0,
-        legend: isDashboard ? undefined : "count", // added
+        legend: isDashboard ? undefined : "cost ($)", // added
         legendOffset: -40,
         legendPosition: "middle",
       }}
       enableGridX={false}
-      enableGridY={false}
+      enableGridY={true}
       pointSize={8}
       pointColor={{ theme: "background" }}
       pointBorderWidth={2}

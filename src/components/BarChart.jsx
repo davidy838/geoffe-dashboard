@@ -39,13 +39,26 @@ const BarChart = ({ isDashboard = false }) => {
           },
         },
       }}
-      keys={["hot dog", "burger", "sandwich", "kebab", "fries", "donut"]}
-      indexBy="country"
+      keys={["savings"]}
+      indexBy="pathway"
       margin={{ top: 50, right: 130, bottom: 50, left: 60 }}
       padding={0.3}
       valueScale={{ type: "linear" }}
       indexScale={{ type: "band", round: true }}
-      colors={{ scheme: "nivo" }}
+      colors={(bar) => {
+        const pathwayColors = {
+          "CHARLiE": tokens("dark").greenAccent[500],
+          "MaBAL": tokens("dark").blueAccent[300],
+          "RUDi": tokens("dark").redAccent[200],
+          "VERRa": tokens("dark").greenAccent[300],
+          "FNvDOD": tokens("dark").blueAccent[500],
+          "FNvSUPS": tokens("dark").redAccent[500],
+          "HEiDi": tokens("dark").greenAccent[400],
+          "CATe": tokens("dark").blueAccent[200],
+          "PPRSS": tokens("dark").redAccent[300],
+        };
+        return pathwayColors[bar.indexValue] || tokens("dark").grey[500];
+      }}
       defs={[
         {
           id: "dots",
@@ -76,7 +89,7 @@ const BarChart = ({ isDashboard = false }) => {
         tickSize: 5,
         tickPadding: 5,
         tickRotation: 0,
-        legend: isDashboard ? undefined : "country", // changed
+        legend: isDashboard ? undefined : "pathway",
         legendPosition: "middle",
         legendOffset: 32,
       }}
@@ -84,7 +97,7 @@ const BarChart = ({ isDashboard = false }) => {
         tickSize: 5,
         tickPadding: 5,
         tickRotation: 0,
-        legend: isDashboard ? undefined : "food", // changed
+        legend: isDashboard ? undefined : "savings ($)",
         legendPosition: "middle",
         legendOffset: -40,
       }}

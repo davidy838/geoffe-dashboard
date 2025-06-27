@@ -1,27 +1,78 @@
+import { useState, useEffect } from "react";
 import { Box, Button, IconButton, Typography, useTheme } from "@mui/material";
 import { tokens } from "../../theme";
 import { mockTransactions } from "../../data/mockData";
 import DownloadOutlinedIcon from "@mui/icons-material/DownloadOutlined";
-import EmailIcon from "@mui/icons-material/Email";
-import PointOfSaleIcon from "@mui/icons-material/PointOfSale";
-import PersonAddIcon from "@mui/icons-material/PersonAdd";
-import TrafficIcon from "@mui/icons-material/Traffic";
+import AttachMoneyIcon from "@mui/icons-material/AttachMoney";
+import DirectionsCarIcon from "@mui/icons-material/DirectionsCar";
+import ScheduleIcon from "@mui/icons-material/Schedule";
+import NatureIcon from "@mui/icons-material/Nature";
 import Header from "../../components/Header";
 import LineChart from "../../components/LineChart";
-import GeographyChart from "../../components/GeographyChart";
 import BarChart from "../../components/BarChart";
 import StatBox from "../../components/StatBox";
 import ProgressCircle from "../../components/ProgressCircle";
+import BcChsaGeographyChart from "../../components/BcChsaGeographyChart";
 
 const Dashboard = () => {
   const theme = useTheme();
   const colors = tokens(theme.palette.mode);
+  
+  // API Base URL - change this to match your API
+  const API_BASE_URL = 'http://localhost:3001/api';
+  
+  const [dashboardData, setDashboardData] = useState({
+    totalSavings: 0,
+    totalDistanceSavings: 0,
+    totalDurationSavings: 0,
+    totalCO2Savings: 0,
+    lastUpdated: null,
+    sourceFile: null
+  });
+  const [loading, setLoading] = useState(true);
+
+  // Fetch dashboard data
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch(`${API_BASE_URL}/dashboard/metrics`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch dashboard data');
+      }
+      const data = await response.json();
+      setDashboardData(data);
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+      // Use default values if API fails
+      setDashboardData({
+        totalSavings: 12361,
+        totalDistanceSavings: 431225,
+        totalDurationSavings: 32441,
+        totalCO2Savings: 1325134,
+        lastUpdated: null,
+        sourceFile: null
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load dashboard data on mount
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  // Poll for dashboard updates (optional)
+  useEffect(() => {
+    const interval = setInterval(fetchDashboardData, 30000); // Update every 30 seconds
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <Box m="20px">
       {/* HEADER */}
       <Box display="flex" justifyContent="space-between" alignItems="center">
-        <Header title="DASHBOARD" subtitle="Welcome to your dashboard" />
+        <Header title="GEOFFE DASHBOARD" subtitle="Welcome to your dashboard" />
 
         <Box>
           <Button
@@ -39,6 +90,16 @@ const Dashboard = () => {
         </Box>
       </Box>
 
+      {/* Dashboard Data Source Info */}
+      {dashboardData.sourceFile && (
+        <Box mb="20px">
+          <Typography variant="body2" color={colors.grey[300]}>
+            Data source: {dashboardData.sourceFile}
+            {dashboardData.lastUpdated && ` (Last updated: ${new Date(dashboardData.lastUpdated).toLocaleString()})`}
+          </Typography>
+        </Box>
+      )}
+
       {/* GRID & CHARTS */}
       <Box
         display="grid"
@@ -55,12 +116,12 @@ const Dashboard = () => {
           justifyContent="center"
         >
           <StatBox
-            title="12,361"
-            subtitle="Emails Sent"
+            title={loading ? "Loading..." : dashboardData.totalSavings.toLocaleString()}
+            subtitle="Total Savings ($)"
             progress="0.75"
             increase="+14%"
             icon={
-              <EmailIcon
+              <AttachMoneyIcon
                 sx={{ color: colors.greenAccent[600], fontSize: "26px" }}
               />
             }
@@ -74,12 +135,12 @@ const Dashboard = () => {
           justifyContent="center"
         >
           <StatBox
-            title="431,225"
-            subtitle="Sales Obtained"
+            title={loading ? "Loading..." : dashboardData.totalDistanceSavings.toLocaleString()}
+            subtitle="Total Distance Savings (km)"
             progress="0.50"
             increase="+21%"
             icon={
-              <PointOfSaleIcon
+              <DirectionsCarIcon
                 sx={{ color: colors.greenAccent[600], fontSize: "26px" }}
               />
             }
@@ -93,12 +154,12 @@ const Dashboard = () => {
           justifyContent="center"
         >
           <StatBox
-            title="32,441"
-            subtitle="New Clients"
+            title={loading ? "Loading..." : dashboardData.totalDurationSavings.toLocaleString()}
+            subtitle="Total Duration Savings (hours)"
             progress="0.30"
             increase="+5%"
             icon={
-              <PersonAddIcon
+              <ScheduleIcon
                 sx={{ color: colors.greenAccent[600], fontSize: "26px" }}
               />
             }
@@ -112,12 +173,12 @@ const Dashboard = () => {
           justifyContent="center"
         >
           <StatBox
-            title="1,325,134"
-            subtitle="Traffic Received"
+            title={loading ? "Loading..." : dashboardData.totalCO2Savings.toLocaleString()}
+            subtitle="Total CO2 Savings (kg)"
             progress="0.80"
             increase="+43%"
             icon={
-              <TrafficIcon
+              <NatureIcon
                 sx={{ color: colors.greenAccent[600], fontSize: "26px" }}
               />
             }
@@ -143,14 +204,14 @@ const Dashboard = () => {
                 fontWeight="600"
                 color={colors.grey[100]}
               >
-                Revenue Generated
+                Savings Per Pathway
               </Typography>
               <Typography
                 variant="h3"
                 fontWeight="bold"
                 color={colors.greenAccent[500]}
               >
-                $59,342.32
+                {loading ? "Loading..." : `$${dashboardData.totalSavings.toLocaleString()}`}
               </Typography>
             </Box>
             <Box>
@@ -180,7 +241,7 @@ const Dashboard = () => {
             p="15px"
           >
             <Typography color={colors.grey[100]} variant="h5" fontWeight="600">
-              Recent Transactions
+              Recent Calculations
             </Typography>
           </Box>
           {mockTransactions.map((transaction, i) => (
@@ -224,7 +285,7 @@ const Dashboard = () => {
           p="30px"
         >
           <Typography variant="h5" fontWeight="600">
-            Campaign
+            RTVS Pathways
           </Typography>
           <Box
             display="flex"
@@ -238,9 +299,9 @@ const Dashboard = () => {
               color={colors.greenAccent[500]}
               sx={{ mt: "15px" }}
             >
-              $48,352 revenue generated
+              $34,225,891 
             </Typography>
-            <Typography>Includes extra misc expenditures and costs</Typography>
+            <Typography>Includes FNHA Pathways</Typography>
           </Box>
         </Box>
         <Box
@@ -253,7 +314,7 @@ const Dashboard = () => {
             fontWeight="600"
             sx={{ padding: "30px 30px 0 30px" }}
           >
-            Sales Quantity
+            Savings Per Pathway
           </Typography>
           <Box height="250px" mt="-20px">
             <BarChart isDashboard={true} />
@@ -270,10 +331,10 @@ const Dashboard = () => {
             fontWeight="600"
             sx={{ marginBottom: "15px" }}
           >
-            Geography Based Traffic
+            BC CHSA Unit Costs
           </Typography>
           <Box height="200px">
-            <GeographyChart isDashboard={true} />
+            <BcChsaGeographyChart isDashboard={true} />
           </Box>
         </Box>
       </Box>
