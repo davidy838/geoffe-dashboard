@@ -12,7 +12,7 @@ import LineChart from "../../components/LineChart";
 import BarChart from "../../components/BarChart";
 import StatBox from "../../components/StatBox";
 import ProgressCircle from "../../components/ProgressCircle";
-import BcChsaGeographyChart from "../../components/BcChsaGeographyChart";
+import BCHeatmap from "../../components/BCHeatmap";
 
 const Dashboard = () => {
   const theme = useTheme();
@@ -280,7 +280,7 @@ const Dashboard = () => {
         {/* ROW 3 */}
         <Box
           gridColumn="span 4"
-          gridRow="span 2"
+          gridRow="span 3"
           backgroundColor={colors.primary[400]}
           p="30px"
         >
@@ -306,7 +306,7 @@ const Dashboard = () => {
         </Box>
         <Box
           gridColumn="span 4"
-          gridRow="span 2"
+          gridRow="span 3"
           backgroundColor={colors.primary[400]}
         >
           <Typography
@@ -316,13 +316,13 @@ const Dashboard = () => {
           >
             Savings Per Pathway
           </Typography>
-          <Box height="250px" mt="-20px">
+          <Box height="350px" mt="-20px">
             <BarChart isDashboard={true} />
           </Box>
         </Box>
         <Box
           gridColumn="span 4"
-          gridRow="span 2"
+          gridRow="span 3"
           backgroundColor={colors.primary[400]}
           padding="30px"
         >
@@ -333,8 +333,8 @@ const Dashboard = () => {
           >
             BC CHSA Unit Costs
           </Typography>
-          <Box height="200px">
-            <BcChsaGeographyChart isDashboard={true} />
+          <Box height="300px">
+            <BCHeatmap isCompact={true} />
           </Box>
         </Box>
       </Box>
