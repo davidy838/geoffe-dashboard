@@ -445,8 +445,8 @@ const StartToLabsRoutes = ({ routes, showRoutes }) => {
       return;
     }
 
-    // Add new polylines
-    routes.forEach((route) => {
+    // Add new polylines - only show routes to closest labs (rank 1)
+    routes.filter(route => route.rank === 1).forEach((route) => {
       let polyline;
       
       if (route.geometry) {
@@ -491,7 +491,36 @@ const StartToLabsRoutes = ({ routes, showRoutes }) => {
 
 const CustomMap = () => {
   const theme = useTheme();
-  const colors = tokens(theme.palette.mode);
+  const colors = tokens(theme.palette.mode) || {};
+  
+  // Ensure colors object has fallback values
+  const safeColors = {
+    primary: {
+      300: colors.primary?.[300] || '#0c101b',
+      400: colors.primary?.[400] || '#1F2A40',
+      500: colors.primary?.[500] || '#141b2d',
+      600: colors.primary?.[600] || '#101624'
+    },
+    greenAccent: {
+      300: colors.greenAccent?.[300] || '#2e7c67',
+      400: colors.greenAccent?.[400] || '#3da58a',
+      500: colors.greenAccent?.[500] || '#4cceac',
+      600: colors.greenAccent?.[600] || '#70d8bd',
+      700: colors.greenAccent?.[700] || '#94e2cd'
+    },
+    blueAccent: {
+      300: colors.blueAccent?.[300] || '#a4a9fc',
+      400: colors.blueAccent?.[400] || '#868dfb',
+      500: colors.blueAccent?.[500] || '#6870fa',
+      600: colors.blueAccent?.[600] || '#535ac8',
+      700: colors.blueAccent?.[700] || '#3e4396'
+    },
+    redAccent: {
+      300: colors.redAccent?.[300] || '#e99592',
+      400: colors.redAccent?.[400] || '#e2726e',
+      500: colors.redAccent?.[500] || '#db4f4a'
+    }
+  };
   
   const [clinics, setClinics] = useState([]);
   const [selectedClinic, setSelectedClinic] = useState(null);
@@ -514,11 +543,26 @@ const CustomMap = () => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
 
+  // Start points upload state
+  const [uploadedStartPoints, setUploadedStartPoints] = useState([]);
+  const [isProcessingStartPointsFile, setIsProcessingStartPointsFile] = useState(false);
+  const [startPointsUploadProgress, setStartPointsUploadProgress] = useState(0);
+  const [isDragOverStartPoints, setIsDragOverStartPoints] = useState(false);
+
+  // Encounters file upload state
+  const [uploadedEncounters, setUploadedEncounters] = useState([]);
+  const [isProcessingEncountersFile, setIsProcessingEncountersFile] = useState(false);
+  const [encountersUploadProgress, setEncountersUploadProgress] = useState(0);
+  const [isDragOverEncounters, setIsDragOverEncounters] = useState(false);
+  const [encountersDialogOpen, setEncountersDialogOpen] = useState(false);
+  const [selectedEncountersFile, setSelectedEncountersFile] = useState(null);
+
   // Start point to labs routing state
   const [showStartToLabsRoutes, setShowStartToLabsRoutes] = useState(false);
   const [startToLabsRoutes, setStartToLabsRoutes] = useState([]);
   const [isCalculatingStartToLabs, setIsCalculatingStartToLabs] = useState(false);
   const [startToLabsProgress, setStartToLabsProgress] = useState(0);
+  const [startPointLabAnalysis, setStartPointLabAnalysis] = useState([]); // Store analysis for each start point
 
   // Cost calculation state
   const [showCostCalculation, setShowCostCalculation] = useState(false);
@@ -1026,6 +1070,7 @@ const CustomMap = () => {
 
       // Geocode addresses
       const geocodedLabs = [];
+      const labsOutsideBC = [];
       for (let i = 0; i < labs.length; i++) {
         const lab = labs[i];
         
@@ -1044,15 +1089,30 @@ const CustomMap = () => {
             
             if (data && data.length > 0) {
               const result = data[0];
-              geocodedLabs.push({
-                id: `lab-${Date.now()}-${i}`,
-                name: lab.labName,
-                type: 'lab',
-                latitude: parseFloat(result.lat),
-                longitude: parseFloat(result.lon),
-                address: result.display_name,
-                description: 'Laboratory facility'
-              });
+              const latitude = parseFloat(result.lat);
+              const longitude = parseFloat(result.lon);
+              
+              // Check if the lab is within British Columbia
+              if (isWithinBritishColumbia(latitude, longitude)) {
+                geocodedLabs.push({
+                  id: `lab-${Date.now()}-${i}`,
+                  name: lab.labName,
+                  type: 'lab',
+                  latitude: latitude,
+                  longitude: longitude,
+                  address: result.display_name,
+                  description: 'Laboratory facility'
+                });
+              } else {
+                // Store labs outside BC for reporting
+                labsOutsideBC.push({
+                  name: lab.labName,
+                  address: lab.address,
+                  latitude: latitude,
+                  longitude: longitude,
+                  geocodedAddress: result.display_name
+                });
+              }
             }
           }
           
@@ -1067,11 +1127,25 @@ const CustomMap = () => {
       // Add labs to the map
       setUploadedLabs(prev => [...prev, ...geocodedLabs]);
       
+      // Prepare success message
+      let message = `Successfully added ${geocodedLabs.length} labs to the map`;
+      
+      if (labsOutsideBC.length > 0) {
+        message += `. ${labsOutsideBC.length} labs were outside British Columbia and were excluded.`;
+        console.log('Labs outside BC:', labsOutsideBC);
+      }
+      
       if (geocodedLabs.length > 0) {
         setSnackbar({ 
           open: true, 
-          message: `Successfully added ${geocodedLabs.length} labs to the map`, 
+          message: message, 
           severity: 'success' 
+        });
+      } else if (labsOutsideBC.length > 0) {
+        setSnackbar({ 
+          open: true, 
+          message: `No labs were within British Columbia. ${labsOutsideBC.length} labs were outside BC boundaries.`, 
+          severity: 'warning' 
         });
       } else {
         setSnackbar({ 
@@ -1120,154 +1194,193 @@ const CustomMap = () => {
 
   // Start point to labs routing functions
   const calculateStartToLabsRoutes = async () => {
-    if (!startPoint || uploadedLabs.length === 0) {
-      setSnackbar({ open: true, message: 'Start point and labs are required', severity: 'warning' });
+    // Use uploaded start points if available, otherwise use single start point
+    const startPointsToAnalyze = uploadedStartPoints.length > 0 ? uploadedStartPoints : (startPoint ? [startPoint] : []);
+    
+    if (startPointsToAnalyze.length === 0 || uploadedLabs.length === 0) {
+      setSnackbar({ open: true, message: 'Start points and labs are required', severity: 'warning' });
       return;
     }
 
-    console.log('Starting route calculation for', uploadedLabs.length, 'labs');
-    console.log('Start point:', startPoint);
-    console.log('Labs:', uploadedLabs);
+    console.log('Starting route calculation for', startPointsToAnalyze.length, 'start points and', uploadedLabs.length, 'labs');
 
     setIsCalculatingStartToLabs(true);
     setShowStartToLabsRoutes(true);
     setStartToLabsProgress(0);
 
     try {
-      const routes = [];
-      let totalDistance = 0;
-      let totalDuration = 0;
+      const analysisResults = [];
+      const allRoutes = [];
+      let totalProgress = 0;
+      const totalSteps = startPointsToAnalyze.length * 2; // Analysis + route calculation
 
-      for (let i = 0; i < uploadedLabs.length; i++) {
-        const lab = uploadedLabs[i];
-        console.log(`Processing lab ${i + 1}/${uploadedLabs.length}:`, lab.name);
+      for (let spIndex = 0; spIndex < startPointsToAnalyze.length; spIndex++) {
+        const startPoint = startPointsToAnalyze[spIndex];
+        console.log(`Processing start point ${spIndex + 1}/${startPointsToAnalyze.length}:`, startPoint.name);
         
-        // Update progress
-        setStartToLabsProgress(((i) / uploadedLabs.length) * 100);
+        // Step 1: Calculate haversine distances to all labs
+        const labDistances = uploadedLabs.map(lab => ({
+          lab,
+          haversineDistance: calculateHaversineDistance(
+            startPoint.latitude, startPoint.longitude,
+            lab.latitude, lab.longitude
+          )
+        }));
+
+        // Sort by haversine distance and get top 3
+        labDistances.sort((a, b) => a.haversineDistance - b.haversineDistance);
+        const top3Labs = labDistances.slice(0, 3);
         
-        try {
-          // Add delay to respect API rate limits
-          if (i > 0) {
-            await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
-          }
+        console.log(`Top 3 closest labs to ${startPoint.name}:`, top3Labs.map(t => `${t.lab.name} (${t.haversineDistance.toFixed(2)} km)`));
+        
+        // Update progress for analysis step
+        totalProgress = ((spIndex * 2) / totalSteps) * 100;
+        setStartToLabsProgress(totalProgress);
+
+        // Step 2: Calculate real routes to top 3 labs
+        const routeResults = [];
+        for (let labIndex = 0; labIndex < top3Labs.length; labIndex++) {
+          const labData = top3Labs[labIndex];
+          const lab = labData.lab;
           
-          // Build coordinates string for OSRM API
-          const coordinates = `${startPoint.longitude},${startPoint.latitude};${lab.longitude},${lab.latitude}`;
-          console.log('API coordinates:', coordinates);
-          
-          // Call OSRM API with timeout
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-          
-          const response = await fetch(
-            `https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson`,
-            { signal: controller.signal }
-          );
-          
-          clearTimeout(timeoutId);
-          console.log('API response status:', response.status);
-          
-          if (response.ok) {
-            const data = await response.json();
-            console.log('API response data:', data);
+          try {
+            // Add delay to respect API rate limits
+            if (labIndex > 0 || spIndex > 0) {
+              await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+            }
             
-            if (data.routes && data.routes.length > 0) {
-              const route = data.routes[0];
+            // Build coordinates string for OSRM API
+            const coordinates = `${startPoint.longitude},${startPoint.latitude};${lab.longitude},${lab.latitude}`;
+            console.log(`Calculating route: ${startPoint.name} to ${lab.name}`);
+            
+            // Call OSRM API with timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+            
+            const response = await fetch(
+              `https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=full&geometries=geojson`,
+              { signal: controller.signal }
+            );
+            
+            clearTimeout(timeoutId);
+            
+            if (response.ok) {
+              const data = await response.json();
               
-              routes.push({
-                id: `start-to-lab-${lab.id}`,
-                from: startPoint,
-                to: lab,
-                distance: route.distance,
-                duration: route.duration,
-                geometry: route.geometry
-              });
-              
-              totalDistance += route.distance;
-              totalDuration += route.duration;
-              
-              console.log(`Route calculated for ${lab.name}:`, route.distance, 'm,', route.duration, 's');
+              if (data.routes && data.routes.length > 0) {
+                const route = data.routes[0];
+                
+                const routeResult = {
+                  id: `start-${startPoint.id}-to-lab-${lab.id}`,
+                  from: startPoint,
+                  to: lab,
+                  haversineDistance: labData.haversineDistance,
+                  realDistance: route.distance,
+                  realDuration: route.duration,
+                  geometry: route.geometry,
+                  rank: labIndex + 1
+                };
+                
+                routeResults.push(routeResult);
+                
+                // Add to all routes for display
+                allRoutes.push(routeResult);
+                
+                console.log(`Route calculated for ${startPoint.name} to ${lab.name}:`, route.distance, 'm,', route.duration, 's');
+              } else {
+                console.log(`No route found for ${startPoint.name} to ${lab.name}, creating fallback`);
+                // Create fallback route
+                const fallbackDistance = labData.haversineDistance * 1000; // Convert km to meters
+                const fallbackDuration = fallbackDistance / 50000 * 3600; // 50 km/h estimate
+                
+                const routeResult = {
+                  id: `start-${startPoint.id}-to-lab-${lab.id}`,
+                  from: startPoint,
+                  to: lab,
+                  haversineDistance: labData.haversineDistance,
+                  realDistance: fallbackDistance,
+                  realDuration: fallbackDuration,
+                  geometry: null,
+                  rank: labIndex + 1
+                };
+                
+                routeResults.push(routeResult);
+                allRoutes.push(routeResult);
+              }
             } else {
-              console.log(`No route found for ${lab.name}, creating fallback`);
+              console.log(`API error for ${startPoint.name} to ${lab.name}, creating fallback`);
               // Create fallback route
-              const fallbackDistance = Math.sqrt(
-                Math.pow(startPoint.latitude - lab.latitude, 2) + 
-                Math.pow(startPoint.longitude - lab.longitude, 2)
-              ) * 111000; // Rough conversion to meters
+              const fallbackDistance = labData.haversineDistance * 1000; // Convert km to meters
               const fallbackDuration = fallbackDistance / 50000 * 3600; // 50 km/h estimate
               
-              routes.push({
-                id: `start-to-lab-${lab.id}`,
+              const routeResult = {
+                id: `start-${startPoint.id}-to-lab-${lab.id}`,
                 from: startPoint,
                 to: lab,
-                distance: fallbackDistance,
-                duration: fallbackDuration,
-                geometry: null // No geometry for fallback
-              });
+                haversineDistance: labData.haversineDistance,
+                realDistance: fallbackDistance,
+                realDuration: fallbackDuration,
+                geometry: null,
+                rank: labIndex + 1
+              };
               
-              totalDistance += fallbackDistance;
-              totalDuration += fallbackDuration;
+              routeResults.push(routeResult);
+              allRoutes.push(routeResult);
             }
-          } else {
-            console.log(`API error for ${lab.name}, creating fallback`);
+            
+          } catch (error) {
+            console.error(`Error calculating route from ${startPoint.name} to ${lab.name}:`, error);
+            
             // Create fallback route
-            const fallbackDistance = Math.sqrt(
-              Math.pow(startPoint.latitude - lab.latitude, 2) + 
-              Math.pow(startPoint.longitude - lab.longitude, 2)
-            ) * 111000; // Rough conversion to meters
+            const fallbackDistance = labData.haversineDistance * 1000; // Convert km to meters
             const fallbackDuration = fallbackDistance / 50000 * 3600; // 50 km/h estimate
             
-            routes.push({
-              id: `start-to-lab-${lab.id}`,
+            const routeResult = {
+              id: `start-${startPoint.id}-to-lab-${lab.id}`,
               from: startPoint,
               to: lab,
-              distance: fallbackDistance,
-              duration: fallbackDuration,
-              geometry: null // No geometry for fallback
-            });
+              haversineDistance: labData.haversineDistance,
+              realDistance: fallbackDistance,
+              realDuration: fallbackDuration,
+              geometry: null,
+              rank: labIndex + 1
+            };
             
-            totalDistance += fallbackDistance;
-            totalDuration += fallbackDuration;
+            routeResults.push(routeResult);
+            allRoutes.push(routeResult);
           }
           
-        } catch (error) {
-          console.error(`Error calculating route to ${lab.name}:`, error);
-          
-          // Check if it's a timeout error
-          if (error.name === 'AbortError') {
-            console.log(`Timeout for ${lab.name}, creating fallback`);
-          }
-          
-          // Create fallback route
-          const fallbackDistance = Math.sqrt(
-            Math.pow(startPoint.latitude - lab.latitude, 2) + 
-            Math.pow(startPoint.longitude - lab.longitude, 2)
-          ) * 111000; // Rough conversion to meters
-          const fallbackDuration = fallbackDistance / 50000 * 3600; // 50 km/h estimate
-          
-          routes.push({
-            id: `start-to-lab-${lab.id}`,
-            from: startPoint,
-            to: lab,
-            distance: fallbackDistance,
-            duration: fallbackDuration,
-            geometry: null // No geometry for fallback
-          });
-          
-          totalDistance += fallbackDistance;
-          totalDuration += fallbackDuration;
+          // Update progress for route calculation step
+          totalProgress = (((spIndex * 2) + 1) / totalSteps) * 100;
+          setStartToLabsProgress(totalProgress);
         }
+
+        // Find the closest lab (rank 1) for cost calculations
+        const closestLabRoute = routeResults.find(r => r.rank === 1);
+        
+        // Store analysis for this start point
+        analysisResults.push({
+          startPoint,
+          allRoutes: routeResults,
+          closestLabRoute,
+          top3Labs: top3Labs.map(t => t.lab)
+        });
       }
 
       // Set progress to 100% when complete
       setStartToLabsProgress(100);
 
-      console.log('Final routes:', routes);
-      setStartToLabsRoutes(routes);
+      console.log('Analysis results:', analysisResults);
+      setStartPointLabAnalysis(analysisResults);
+      setStartToLabsRoutes(allRoutes);
+      
+      const totalStartPoints = analysisResults.length;
+      const totalRoutes = allRoutes.length;
+      const closestRoutes = analysisResults.filter(r => r.closestLabRoute).length;
       
       setSnackbar({ 
         open: true, 
-        message: `Calculated routes to ${routes.length} labs. Total: ${formatDistance(totalDistance)}, ${formatDuration(totalDuration)}`, 
+        message: `Analyzed ${totalStartPoints} start points. Calculated ${totalRoutes} routes (${closestRoutes} closest labs found).`, 
         severity: 'success' 
       });
 
@@ -1289,6 +1402,7 @@ const CustomMap = () => {
     setShowStartToLabsRoutes(false);
     setStartToLabsRoutes([]);
     setStartToLabsProgress(0);
+    setStartPointLabAnalysis([]);
     setShowCostCalculation(false);
     setCostResults(null);
     setSnackbar({ open: true, message: 'Start to labs routes cleared', severity: 'info' });
@@ -1296,69 +1410,171 @@ const CustomMap = () => {
 
   // Calculate costs for each age group based on routes
   const calculateCosts = () => {
-    if (!startToLabsRoutes.length) {
-      setSnackbar({ open: true, message: 'No routes available for cost calculation', severity: 'warning' });
+    if (!startPointLabAnalysis.length) {
+      setSnackbar({ open: true, message: 'No analysis available for cost calculation', severity: 'warning' });
       return;
     }
 
     const calculator = new PFCCalculator();
     
-    // Calculate costs for each route
-    const routeCosts = startToLabsRoutes.map(route => {
-      const distanceKm = route.distance / 1000;
+    // Calculate costs for each start point's closest lab
+    const startPointCosts = startPointLabAnalysis.map(analysis => {
+      if (!analysis.closestLabRoute) {
+        return null;
+      }
+      
+      const route = analysis.closestLabRoute;
+      const distanceKm = route.realDistance / 1000; // Convert meters to km
+      
+      // Determine health authority (simplified - would need actual HA boundaries)
+      const ha_name = calculator.getHealthAuthority(analysis.startPoint.latitude, analysis.startPoint.longitude);
+      
       return {
-        route,
-        child: calculator.calculateLabVisit({
+        startPoint: analysis.startPoint,
+        closestLab: route.to,
+        route: route,
+        healthAuthority: ha_name,
+        child: calculator.calculateMDAppointment({
+          distance: distanceKm,
+          duration: costParams.duration,
           age: 10,
-          distance: distanceKm,
-          ...costParams
+          ha_name: ha_name,
+          service_type: 'MD'
         }),
-        adult: calculator.calculateLabVisit({
+        adult: calculator.calculateMDAppointment({
+          distance: distanceKm,
+          duration: costParams.duration,
           age: 40,
-          distance: distanceKm,
-          ...costParams
+          ha_name: ha_name,
+          service_type: 'MD'
         }),
-        senior: calculator.calculateLabVisit({
-          age: 70,
+        senior: calculator.calculateMDAppointment({
           distance: distanceKm,
-          ...costParams
+          duration: costParams.duration,
+          age: 70,
+          ha_name: ha_name,
+          service_type: 'MD'
         })
       };
-    });
+    }).filter(cost => cost !== null);
 
-    // Calculate totals for each age group
-    const childTotal = routeCosts.reduce((sum, routeCost) => sum + routeCost.child.totalCost, 0);
-    const adultTotal = routeCosts.reduce((sum, routeCost) => sum + routeCost.adult.totalCost, 0);
-    const seniorTotal = routeCosts.reduce((sum, routeCost) => sum + routeCost.senior.totalCost, 0);
+    // Apply encounter multipliers if encounters data is available
+    let encounterMultipliers = {};
+    if (uploadedEncounters.length > 0) {
+      // Create a lookup table for encounter counts by community and age group
+      uploadedEncounters.forEach(enc => {
+        const key = `${enc.community}-${enc.ageGroup}`;
+        encounterMultipliers[key] = enc.encounters;
+      });
+    }
+
+    // Calculate totals for each age group with encounter multipliers
+    const childTotal = startPointCosts.reduce((sum, cost) => {
+      const multiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
+      return sum + (cost.child.costs.total * multiplier);
+    }, 0);
+    
+    const adultTotal = startPointCosts.reduce((sum, cost) => {
+      const multiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
+      return sum + (cost.adult.costs.total * multiplier);
+    }, 0);
+    
+    const seniorTotal = startPointCosts.reduce((sum, cost) => {
+      const multiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
+      return sum + (cost.senior.costs.total * multiplier);
+    }, 0);
+    
     const grandTotal = childTotal + adultTotal + seniorTotal;
 
+    // Calculate subunit totals with encounter multipliers
+    const totalLostProductivity = startPointCosts.reduce((sum, cost) => {
+      const multiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
+      return sum + (cost.adult.costs.lostProductivity * multiplier);
+    }, 0);
+    
+    const totalInformalCaregiving = startPointCosts.reduce((sum, cost) => {
+      const childMultiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
+      const adultMultiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
+      const seniorMultiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
+      
+      return sum + 
+        (cost.child.costs.informalCaregiving * childMultiplier) + 
+        (cost.adult.costs.informalCaregiving * adultMultiplier) + 
+        (cost.senior.costs.informalCaregiving * seniorMultiplier);
+    }, 0);
+    
+    const totalOutOfPocket = startPointCosts.reduce((sum, cost) => {
+      const childMultiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
+      const adultMultiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
+      const seniorMultiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
+      
+      return sum + 
+        (cost.child.costs.outOfPocket * childMultiplier) + 
+        (cost.adult.costs.outOfPocket * adultMultiplier) + 
+        (cost.senior.costs.outOfPocket * seniorMultiplier);
+    }, 0);
+
+    // Calculate CO2 emissions totals with encounter multipliers
+    const totalCO2 = startPointCosts.reduce((sum, cost) => {
+      const childMultiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
+      const adultMultiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
+      const seniorMultiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
+      
+      // Use child emissions as base, but multiply by total encounters for this community
+      const totalEncounters = (encounterMultipliers[`${cost.startPoint.name}-0-14`] || 0) +
+                             (encounterMultipliers[`${cost.startPoint.name}-15-64`] || 0) +
+                             (encounterMultipliers[`${cost.startPoint.name}-65+`] || 0);
+      
+      return sum + (cost.child.emissions.co2RoundTrip * Math.max(totalEncounters, 1));
+    }, 0);
+
     const results = {
-      routeCosts, // Individual route costs
-      child: calculator.calculateLabVisit({
+      startPointCosts, // Individual start point costs
+      child: startPointCosts[0]?.child || calculator.calculateMDAppointment({
+        distance: 35,
+        duration: costParams.duration,
         age: 10,
-        distance: startToLabsRoutes[0]?.distance / 1000 || 35, // Single route cost for display
-        ...costParams
+        ha_name: 'Vancouver Coastal',
+        service_type: 'MD'
       }),
-      adult: calculator.calculateLabVisit({
+      adult: startPointCosts[0]?.adult || calculator.calculateMDAppointment({
+        distance: 35,
+        duration: costParams.duration,
         age: 40,
-        distance: startToLabsRoutes[0]?.distance / 1000 || 35,
-        ...costParams
+        ha_name: 'Vancouver Coastal',
+        service_type: 'MD'
       }),
-      senior: calculator.calculateLabVisit({
+      senior: startPointCosts[0]?.senior || calculator.calculateMDAppointment({
+        distance: 35,
+        duration: costParams.duration,
         age: 70,
-        distance: startToLabsRoutes[0]?.distance / 1000 || 35,
-        ...costParams
+        ha_name: 'Vancouver Coastal',
+        service_type: 'MD'
       }),
       totals: {
         child: childTotal,
         adult: adultTotal,
         senior: seniorTotal,
-        grand: grandTotal
+        grand: grandTotal,
+        lostProductivity: totalLostProductivity,
+        informalCaregiving: totalInformalCaregiving,
+        outOfPocket: totalOutOfPocket
+      },
+      emissions: {
+        totalCO2: totalCO2,
+        averageCO2: totalCO2 / startPointCosts.length
       },
       summary: {
-        totalRoutes: startToLabsRoutes.length,
-        averageDistance: startToLabsRoutes.reduce((sum, route) => sum + route.distance, 0) / startToLabsRoutes.length / 1000,
-        totalDistance: startToLabsRoutes.reduce((sum, route) => sum + route.distance, 0) / 1000
+        totalStartPoints: startPointCosts.length,
+        averageDistance: startPointCosts.reduce((sum, cost) => sum + cost.route.realDistance, 0) / startPointCosts.length / 1000,
+        totalDistance: startPointCosts.reduce((sum, cost) => sum + cost.route.realDistance, 0) / 1000,
+        healthAuthorities: [...new Set(startPointCosts.map(cost => cost.healthAuthority))]
+      },
+      encounters: {
+        data: uploadedEncounters,
+        hasData: uploadedEncounters.length > 0,
+        totalEncounters: uploadedEncounters.reduce((sum, enc) => sum + enc.encounters, 0),
+        communitiesWithEncounters: [...new Set(uploadedEncounters.map(enc => enc.community))].length
       }
     };
 
@@ -1369,7 +1585,7 @@ const CustomMap = () => {
 
   // Download functions
   const downloadLabCostsCSV = () => {
-    if (!costResults || !costResults.routeCosts) {
+    if (!costResults || !costResults.startPointCosts) {
       setSnackbar({ open: true, message: 'No cost data available for download', severity: 'warning' });
       return;
     }
@@ -1377,70 +1593,163 @@ const CustomMap = () => {
     try {
       // Create CSV headers
       const headers = [
-        'Lab Name',
-        'Lab Address',
-        'Distance (km)',
-        'Duration (min)',
+        'Start Point Name',
+        'Start Point Address',
+        'Start Point Coordinates',
+        'Closest Lab Name',
+        'Closest Lab Address',
+        'Health Authority',
+        'Haversine Distance (km)',
+        'Real Distance (km)',
+        'Real Duration (min)',
+        'Round Trip Distance (km)',
+        'Travel Time (hrs)',
+        'Appointment Time (hrs)',
+        'Total Duration (hrs)',
+        'CO2 Emissions (kg)',
+        'Child (0-14) - Encounters',
         'Child (0-14) - Lost Productivity',
         'Child (0-14) - Informal Caregiving',
         'Child (0-14) - Out of Pocket',
+        'Child (0-14) - Cost Per Encounter',
         'Child (0-14) - Total Cost',
+        'Adult (15-64) - Encounters',
         'Adult (15-64) - Lost Productivity',
         'Adult (15-64) - Informal Caregiving',
         'Adult (15-64) - Out of Pocket',
+        'Adult (15-64) - Cost Per Encounter',
         'Adult (15-64) - Total Cost',
+        'Senior (65+) - Encounters',
         'Senior (65+) - Lost Productivity',
         'Senior (65+) - Informal Caregiving',
         'Senior (65+) - Out of Pocket',
+        'Senior (65+) - Cost Per Encounter',
         'Senior (65+) - Total Cost',
-        'Grand Total (All Ages)'
+        'Grand Total (All Ages)',
+        'Caregiver Coefficient (Child)',
+        'Caregiver Coefficient (Adult)',
+        'Caregiver Coefficient (Senior)',
+        'Parking Cost',
+        'Wage Rate ($/hr)',
+        'Car Cost ($/km)',
+        'Meal Cost',
+        'Accommodation Cost',
+        'Data Usage Cost'
       ];
 
       // Create CSV rows
-      const rows = costResults.routeCosts.map(routeCost => {
-        const { route, child, adult, senior } = routeCost;
-        const grandTotal = child.totalCost + adult.totalCost + senior.totalCost;
+      const rows = costResults.startPointCosts.map(cost => {
+        const { startPoint, closestLab, route, healthAuthority, child, adult, senior } = cost;
+        
+        // Get encounter counts for this community
+        const childEncounters = costResults.encounters.data.find(enc => 
+          enc.community === startPoint.name && enc.ageGroup === '0-14'
+        )?.encounters || 1;
+        
+        const adultEncounters = costResults.encounters.data.find(enc => 
+          enc.community === startPoint.name && enc.ageGroup === '15-64'
+        )?.encounters || 1;
+        
+        const seniorEncounters = costResults.encounters.data.find(enc => 
+          enc.community === startPoint.name && enc.ageGroup === '65+'
+        )?.encounters || 1;
+        
+        // Calculate total costs with encounters
+        const childTotalCost = child.costs.total * childEncounters;
+        const adultTotalCost = adult.costs.total * adultEncounters;
+        const seniorTotalCost = senior.costs.total * seniorEncounters;
+        const grandTotal = childTotalCost + adultTotalCost + seniorTotalCost;
         
         return [
-          route.to.name,
-          route.to.address,
-          (route.distance / 1000).toFixed(2),
-          Math.round(route.duration / 60),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.lostProductivity),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.informalCaregiving),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.outOfPocket),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.totalCost),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.lostProductivity),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.informalCaregiving),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.outOfPocket),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.totalCost),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.lostProductivity),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.informalCaregiving),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.outOfPocket),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.totalCost),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(grandTotal)
+          startPoint.name,
+          startPoint.address,
+          `${startPoint.latitude.toFixed(6)}, ${startPoint.longitude.toFixed(6)}`,
+          closestLab.name,
+          closestLab.address,
+          healthAuthority,
+          route.haversineDistance.toFixed(2),
+          (route.realDistance / 1000).toFixed(2),
+          Math.round(route.realDuration / 60),
+          child.distance.roundTrip.toFixed(2),
+          child.duration.travel.toFixed(2),
+          child.duration.appointment.toFixed(2),
+          child.duration.total.toFixed(2),
+          child.emissions.co2RoundTrip.toFixed(2),
+          childEncounters,
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.costs.lostProductivity),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.costs.informalCaregiving),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.costs.outOfPocket),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.costs.total),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(childTotalCost),
+          adultEncounters,
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.costs.lostProductivity),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.costs.informalCaregiving),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.costs.outOfPocket),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.costs.total),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adultTotalCost),
+          seniorEncounters,
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.costs.lostProductivity),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.costs.informalCaregiving),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.costs.outOfPocket),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.costs.total),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(seniorTotalCost),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(grandTotal),
+          child.parameters.caregiverCoeff.toFixed(2),
+          adult.parameters.caregiverCoeff.toFixed(2),
+          senior.parameters.caregiverCoeff.toFixed(2),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.parkingCost),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.wage),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.carCost),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.mealCost),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.accommodation),
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.dataUsage)
         ];
       });
 
       // Add summary row
       rows.push([
-        'TOTAL FOR ALL LABS',
+        'TOTAL FOR ALL START POINTS',
         '',
+        '',
+        '',
+        '',
+        costResults.summary.healthAuthorities.join(', '),
+        costResults.startPointCosts.reduce((sum, cost) => sum + cost.route.haversineDistance, 0).toFixed(2),
         costResults.summary.totalDistance.toFixed(2),
-        Math.round(costResults.routeCosts.reduce((sum, rc) => sum + rc.route.duration, 0) / 60),
+        Math.round(costResults.startPointCosts.reduce((sum, cost) => sum + cost.route.realDuration, 0) / 60),
+        costResults.startPointCosts.reduce((sum, cost) => sum + cost.child.distance.roundTrip, 0).toFixed(2),
+        costResults.startPointCosts.reduce((sum, cost) => sum + cost.child.duration.travel, 0).toFixed(2),
+        costResults.startPointCosts.reduce((sum, cost) => sum + cost.child.duration.appointment, 0).toFixed(2),
+        costResults.startPointCosts.reduce((sum, cost) => sum + cost.child.duration.total, 0).toFixed(2),
+        costResults.emissions.totalCO2.toFixed(2),
+        costResults.encounters.data.filter(enc => enc.ageGroup === '0-14').reduce((sum, enc) => sum + enc.encounters, 0),
         new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(0), // Children no productivity loss
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.informalCaregiving),
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.outOfPocket),
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.child.costs.total),
         new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.child),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.routeCosts.reduce((sum, rc) => sum + rc.child.outOfPocket, 0)),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.child),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.routeCosts.reduce((sum, rc) => sum + rc.adult.lostProductivity, 0)),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.routeCosts.reduce((sum, rc) => sum + rc.adult.informalCaregiving, 0)),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.routeCosts.reduce((sum, rc) => sum + rc.adult.outOfPocket, 0)),
+        costResults.encounters.data.filter(enc => enc.ageGroup === '15-64').reduce((sum, enc) => sum + enc.encounters, 0),
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.lostProductivity),
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.startPointCosts.reduce((sum, cost) => sum + cost.adult.costs.informalCaregiving, 0)),
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.startPointCosts.reduce((sum, cost) => sum + cost.adult.costs.outOfPocket, 0)),
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.adult.costs.total),
         new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.adult),
+        costResults.encounters.data.filter(enc => enc.ageGroup === '65+').reduce((sum, enc) => sum + enc.encounters, 0),
         new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(0), // Seniors no productivity loss
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.routeCosts.reduce((sum, rc) => sum + rc.senior.informalCaregiving, 0)),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.routeCosts.reduce((sum, rc) => sum + rc.senior.outOfPocket, 0)),
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.startPointCosts.reduce((sum, cost) => sum + cost.senior.costs.informalCaregiving, 0)),
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.startPointCosts.reduce((sum, cost) => sum + cost.senior.costs.outOfPocket, 0)),
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.senior.costs.total),
         new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.senior),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.grand)
+        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.grand),
+        '', // Caregiver coefficients vary by age group
+        '',
+        '',
+        '', // Parking costs vary by HA
+        '', // Wage rate is constant
+        '', // Car cost is constant
+        '', // Meal cost is constant
+        '', // Accommodation cost is constant
+        ''  // Data usage cost is constant
       ]);
 
       // Convert to CSV
@@ -1453,13 +1762,13 @@ const CustomMap = () => {
       const link = document.createElement('a');
       const url = URL.createObjectURL(blob);
       link.setAttribute('href', url);
-      link.setAttribute('download', `lab_costs_analysis_${new Date().toISOString().split('T')[0]}.csv`);
+      link.setAttribute('download', `start_point_MD_costs_analysis_${new Date().toISOString().split('T')[0]}.csv`);
       link.style.visibility = 'hidden';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
 
-      setSnackbar({ open: true, message: 'Lab costs CSV downloaded successfully', severity: 'success' });
+      setSnackbar({ open: true, message: 'Start point MD costs CSV downloaded successfully', severity: 'success' });
     } catch (error) {
       console.error('Error downloading CSV:', error);
       setSnackbar({ open: true, message: 'Error downloading CSV file', severity: 'error' });
@@ -1468,73 +1777,179 @@ const CustomMap = () => {
 
   const downloadCostFormulas = () => {
     try {
-      const formulas = `# Lab Visit Cost Formulas
+      const formulas = `# Patient and Family Cost (PFC) Calculation Methodology
+# Based on R Script: RSA-pediatrics cost analysis
+# Generated: ${new Date().toLocaleString()}
 
-## Overview
-This document contains the mathematical formulas used to calculate lab visit costs for different age groups.
+## OVERVIEW
+This document outlines the methodology for calculating patient and family costs (PFC) for healthcare services, specifically MD appointments, based on the R script analysis framework. The methodology accounts for travel distances, time costs, and various cost components by age group and health authority.
 
-## Base Constants
-- Lab Wait Time: 0.25 hours
-- Lab Appointment Time: 0.15 hours
-- Car Cost per Kilometer: $0.48
-- Caregiver Coefficient (0-14): 1.0
-- Caregiver Coefficient (15+): 0.5
+## SERVICE TYPE
+Primary focus: MD (Medical Doctor) appointments
+- Family Medicine Wait Time: 0.5 hours
+- Family Medicine Appointment Time: 0.26 hours
+- Total MD Time: 0.76 hours (plus additional duration parameter)
 
-## Cost Components
-Each lab visit has three cost components:
-1. Lost Productivity (LP) - Wage loss for working-age patients
-2. Informal Caregiving (IC) - Cost of caregiver time
-3. Out of Pocket (OOP) - Direct expenses (travel, parking)
+## AGE GROUPS
+- Children (0-14 years)
+- Working Age (15-64 years) 
+- Seniors (65+ years)
 
-## Formulas by Age Group
+## BASE PARAMETERS
+
+### Economic Parameters
+- Wage Rate: $30.54/hour
+- Car Cost: $0.48/km
+- Meal Cost: $15.00
+- Accommodation Cost: $100.00
+- Data Usage Cost: $1.25
+- CO2 Emission Rate: 0.15 kg/km
+
+### Health Authority Parking Costs
+- Fraser: $3.00
+- Interior: $3.00
+- Island: $2.00
+- Northern: $8.00
+- Vancouver Coastal: $2.00
+
+## CAREGIVER COEFFICIENTS
+Caregiver coefficients vary by age group and service type:
+- Children (0-14), Non-Hospital: 1.0
+- Children (0-14), Hospital: 0.75
+- Adults/Seniors, Non-Hospital: 0.5
+- Adults/Seniors, Hospital: 0.25
+
+## COST CALCULATION METHODOLOGY
+
+### 1. Distance and Time Calculations
+- One-way Distance: Real route distance from start point to destination
+- Round Trip Distance: One-way distance × 2
+- Travel Time: Round trip distance ÷ 50 km/h (average speed)
+- Appointment Time: MD time (0.76h) + additional duration parameter
+- Total Duration: Travel time + appointment time
+
+### 2. Subunit Cost Calculations
+
+#### Lost Productivity (LP)
+Only applies to working age (15-64):
+- Non-Virtual: wage × (appointment_time + round_trip_duration)
+- Virtual: wage × appointment_time
+- Children and Seniors: $0.00
+
+#### Informal Caregiving (IC)
+Applies to all age groups:
+- Non-Virtual: caregiver_coefficient × wage × (appointment_time + round_trip_duration)
+- Virtual: caregiver_coefficient × wage × appointment_time
+
+#### Out of Pocket (OOP)
+Varies by service type:
+- MD: parking_cost + (round_trip_distance × car_cost)
+- Virtual: data_usage_cost
+- Other services: parking_cost + meal_cost + (round_trip_distance × car_cost)
+
+### 3. Total Unit Cost
+Total Cost = Lost Productivity + Informal Caregiving + Out of Pocket
+
+### 4. CO2 Emissions
+CO2 Emissions = one_way_distance × 0.15 kg/km
+
+## FORMULA BREAKDOWN BY AGE GROUP
 
 ### Children (0-14)
-- Lost Productivity: $0.00 (no productivity loss for children)
-- Informal Caregiving: (0.40 + duration) × wage × 1.0
-- Out of Pocket: (distance × 0.48) + parking
-- Total Cost: IC + OOP
+- Lost Productivity: $0.00
+- Informal Caregiving: 1.0 × wage × (appointment_time + round_trip_duration)
+- Out of Pocket: parking_cost + (round_trip_distance × car_cost)
+- Total: IC + OOP
 
 ### Working Age (15-64)
-- Lost Productivity: (0.40 + duration) × wage
-- Informal Caregiving: (0.40 + duration) × wage × 0.5
-- Out of Pocket: (distance × 0.48) + parking
-- Total Cost: LP + IC + OOP
+- Lost Productivity: wage × (appointment_time + round_trip_duration)
+- Informal Caregiving: 0.5 × wage × (appointment_time + round_trip_duration)
+- Out of Pocket: parking_cost + (round_trip_distance × car_cost)
+- Total: LP + IC + OOP
 
 ### Seniors (65+)
-- Lost Productivity: $0.00 (no productivity loss for seniors)
-- Informal Caregiving: (0.40 + duration) × wage × 0.5
-- Out of Pocket: (distance × 0.48) + parking
-- Total Cost: IC + OOP
+- Lost Productivity: $0.00
+- Informal Caregiving: 0.5 × wage × (appointment_time + round_trip_duration)
+- Out of Pocket: parking_cost + (round_trip_distance × car_cost)
+- Total: IC + OOP
 
-## Default Parameters
-- Wage Rate: $30.54/hour
-- Duration: 0.25 hours
-- Parking Cost: $3.00
-- Meal Cost: $0.00 (no meals for lab visits)
+## EXAMPLE CALCULATION
 
-## Calculation Notes
-- Total Time = Lab Wait (0.25h) + Lab Appointment (0.15h) + Duration
-- Distance is converted from meters to kilometers for calculations
-- All costs are in Canadian Dollars (CAD)
-- Productivity loss only applies to working-age individuals (15-64)
+For a 40-year-old patient traveling 35 km one-way to Vancouver Coastal Health Authority:
 
-Generated on: ${new Date().toLocaleString()}
+### Inputs
+- Distance: 35 km (one-way)
+- Round Trip: 70 km
+- Duration: 0.25 hours additional
+- Appointment Time: 0.76 + 0.25 = 1.01 hours
+- Travel Time: 70 ÷ 50 = 1.40 hours
+- Total Duration: 1.40 + 1.01 = 2.41 hours
+- Health Authority: Vancouver Coastal (parking: $2.00)
+- Age Group: 15-64 (Working Age)
+
+### Calculations
+- Lost Productivity: $30.54 × 2.41 = $73.60
+- Informal Caregiving: 0.5 × $30.54 × 2.41 = $36.80
+- Out of Pocket: $2.00 + (70 × $0.48) = $35.60
+- Total Cost: $73.60 + $36.80 + $35.60 = $146.00
+- CO2 Emissions: 35 × 0.15 = 5.25 kg
+
+## DATA STRUCTURE
+
+### Input Data Required
+- Start Point Coordinates (latitude, longitude)
+- Destination Coordinates (latitude, longitude)
+- Real Route Distance (meters)
+- Real Route Duration (seconds)
+- Health Authority
+- Age Group
+- Service Type
+
+### Output Data Generated
+- Round Trip Distance (km)
+- Round Trip Duration (hours)
+- Appointment Time (hours)
+- CO2 Emissions (kg)
+- Lost Productivity Cost ($)
+- Informal Caregiving Cost ($)
+- Out of Pocket Cost ($)
+- Total Unit Cost ($)
+- Caregiver Coefficient
+- All Input Parameters
+
+## VALIDATION NOTES
+
+1. All costs are in Canadian Dollars (CAD)
+2. Distances are converted from meters to kilometers
+3. Durations are converted from seconds to hours
+4. Round trip calculations double the one-way values
+5. Health authority parking costs vary by region
+6. CO2 emissions are calculated for one-way distance only
+7. Virtual appointments have different cost structures
+8. Hospital services have different caregiver coefficients
+
+## REFERENCES
+Based on R script: RSA-pediatrics cost analysis
+Methodology adapted for web-based calculation tool
+All parameters sourced from BC healthcare cost studies
+
+Generated by GEOFFE Dashboard - Custom Map Analysis Tool
 `;
 
       const blob = new Blob([formulas], { type: 'text/plain;charset=utf-8;' });
       const link = document.createElement('a');
       const url = URL.createObjectURL(blob);
       link.setAttribute('href', url);
-      link.setAttribute('download', `lab_cost_formulas_${new Date().toISOString().split('T')[0]}.txt`);
+      link.setAttribute('download', `PFC_calculation_methodology_${new Date().toISOString().split('T')[0]}.txt`);
       link.style.visibility = 'hidden';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
 
-      setSnackbar({ open: true, message: 'Cost formulas downloaded successfully', severity: 'success' });
+      setSnackbar({ open: true, message: 'PFC calculation methodology downloaded successfully', severity: 'success' });
     } catch (error) {
       console.error('Error downloading formulas:', error);
-      setSnackbar({ open: true, message: 'Error downloading cost formulas', severity: 'error' });
+      setSnackbar({ open: true, message: 'Error downloading PFC methodology', severity: 'error' });
     }
   };
 
@@ -1556,25 +1971,30 @@ Generated on: ${new Date().toLocaleString()}
     }
   };
 
-  // PFC Calculator class
+  // PFC Calculator class - Updated to match R script methodology
   class PFCCalculator {
     constructor() {
-      // Base constants
-      this.fm_wait = 0.5;
-      this.fm_appt = 0.26;
-      this.caregiver_0_14 = 1.0;
-      this.caregiver_15 = 0.5;
-      this.car_cost_per_km = 0.48;
+      // Base constants from R script
+      this.wage = 30.54;
+      this.meal_cost = 15;
+      this.accomm = 100;
+      this.car_cost = 0.48;
+      this.data_usage = 1.25;
+      this.co2_rate = 0.15; // kg/km
       
       // Service-specific constants
-      this.ed_los_CTAS_III = 3.9;
-      this.ed_los_CTAS_V = 2.7;
-      this.hosp_los = 53.6;
-      this.caregiver_0_14_hosp = 0.75;
-      this.caregiver_15_hosp = 0.25;
-      this.data_usage = 1.25;
-      this.virtual_wait = 0.27;
-      this.virtual_appt = 0.35;
+      this.fm_wait = 0.5;
+      this.fm_appt = 0.26;
+      this.MD_time = this.fm_wait + this.fm_appt;
+      
+      // Health Authority parking costs (alphabetical order)
+      this.ha_parking = {
+        'Fraser': 3,
+        'Interior': 3,
+        'Island': 2,
+        'Northern': 8,
+        'Vancouver Coastal': 2
+      };
     }
 
     // Helper function to determine age group
@@ -1584,60 +2004,145 @@ Generated on: ${new Date().toLocaleString()}
       return '65+';
     }
 
-    // Lab-specific constants
-    get lab_wait() { return 0.25; }
-    get lab_appt() { return 0.15; }
+    // Helper function to determine Health Authority (simplified - would need actual HA data)
+    getHealthAuthority(latitude, longitude) {
+      // Simplified mapping - in real implementation, this would use actual HA boundaries
+      // For now, return a default
+      return 'Vancouver Coastal';
+    }
 
-    // Calculate Lab Visit costs
-    calculateLabVisit(params = {}) {
+    // Calculate caregiver coefficient based on age group and service type
+    getCaregiverCoeff(ageGroup, serviceType) {
+      if (ageGroup === '0-14' && serviceType !== 'Hosp') {
+        return 1.0;
+      } else if (ageGroup === '0-14' && serviceType === 'Hosp') {
+        return 0.75;
+      } else if (ageGroup !== '0-14' && serviceType === 'Hosp') {
+        return 0.25;
+      } else if (ageGroup !== '0-14' && serviceType !== 'Hosp') {
+        return 0.5;
+      }
+      return 0.5; // default
+    }
+
+    // Calculate MD appointment costs (main service type from R script)
+    calculateMDAppointment(params = {}) {
       const {
-        wage = 30.54,
-        distance = 35,
-        duration = 0.25,
+        distance = 35, // one-way distance in km
+        duration = 0.25, // additional time in hours
         age = 40,
-        meal = 0,
-        parking = 3
+        ha_name = 'Vancouver Coastal',
+        service_type = 'MD'
       } = params;
 
       const ageGroup = this.getAgeGroup(age);
-      const totalTime = this.lab_wait + this.lab_appt + duration;
+      const appt_time = this.MD_time + duration;
+      
+      // Round trip calculations (as per R script)
+      const street_distance = distance * 2; // round trip
+      // Fix: Round trip duration should be travel time (estimated from distance) + appointment time
+      const travel_time = (distance * 2) / 50; // Assume 50 km/h average speed for round trip
+      const street_duration = travel_time + appt_time; // Total time including travel and appointment
+      
+      // Get parking cost for health authority
+      const parking_cost = this.ha_parking[ha_name] || 3; // default to 3 if HA not found
+      
+      // Get caregiver coefficient
+      const caregiver_coeff = this.getCaregiverCoeff(ageGroup, service_type);
 
-      let lp = 0; // Lost Productivity
-      let ic = 0; // Informal Caregiving
-      let oop = 0; // Out of Pocket
+      // Calculate subunit costs
+      let subunit_LP = 0; // Lost Productivity
+      let subunit_IC = 0; // Informal Caregiving
+      let subunit_OOP = 0; // Out of Pocket
 
-      // Lost Productivity (only for working age)
-      if (ageGroup === '15-64') {
-        lp = totalTime * wage;
+      // Lost Productivity (only for ages 15-64, non-virtual)
+      if (ageGroup === '15-64' && service_type !== 'Virtual') {
+        subunit_LP = this.wage * street_duration;
+      } else if (ageGroup === '15-64' && service_type === 'Virtual') {
+        subunit_LP = this.wage * appt_time;
       }
 
-      // Informal Caregiving
-      if (ageGroup === '0-14') {
-        ic = totalTime * wage * this.caregiver_0_14;
+      // Informal Caregiving (for all age groups)
+      if (service_type !== 'Virtual') {
+        subunit_IC = caregiver_coeff * this.wage * street_duration;
       } else {
-        ic = totalTime * wage * this.caregiver_15;
+        subunit_IC = caregiver_coeff * this.wage * appt_time;
       }
 
-      // Out of Pocket (travel + parking, no meal for lab visits)
-      oop = (distance * this.car_cost_per_km) + meal + parking;
+      // Out of Pocket (varies by service type)
+      if (service_type === 'MD') {
+        subunit_OOP = parking_cost + (street_distance * this.car_cost);
+      } else if (service_type === 'Virtual') {
+        subunit_OOP = this.data_usage;
+      } else {
+        // Default for other service types
+        subunit_OOP = parking_cost + (street_distance * this.car_cost);
+      }
+
+      // Total unit cost
+      const unit_cost = subunit_IC + subunit_LP + subunit_OOP;
+
+      // CO2 emissions (round trip)
+      const co2_roundtrip = distance * this.co2_rate;
 
       return {
-        serviceType: 'Lab Visit',
+        serviceType: service_type,
         ageGroup,
-        lostProductivity: lp,
-        informalCaregiving: ic,
-        outOfPocket: oop,
-        totalCost: lp + ic + oop,
+        healthAuthority: ha_name,
+        distance: {
+          oneWay: distance,
+          roundTrip: street_distance
+        },
+        duration: {
+          appointment: appt_time,
+          travel: travel_time,
+          total: street_duration
+        },
+        costs: {
+          lostProductivity: subunit_LP,
+          informalCaregiving: subunit_IC,
+          outOfPocket: subunit_OOP,
+          total: unit_cost
+        },
+        parameters: {
+          wage: this.wage,
+          parkingCost: parking_cost,
+          carCost: this.car_cost,
+          caregiverCoeff: caregiver_coeff,
+          mealCost: this.meal_cost,
+          accommodation: this.accomm,
+          dataUsage: this.data_usage
+        },
+        emissions: {
+          co2RoundTrip: co2_roundtrip
+        },
         breakdown: {
-          wage,
-          distance,
-          duration,
-          age,
-          meal,
-          parking,
-          totalTime
+          appointmentTime: appt_time,
+          travelTime: travel_time,
+          streetDistance: street_distance,
+          streetDuration: street_duration
         }
       };
+    }
+
+    // Calculate costs for different service types
+    calculateServiceCosts(params = {}) {
+      const {
+        distance = 35,
+        duration = 0.25,
+        age = 40,
+        ha_name = 'Vancouver Coastal',
+        service_type = 'MD'
+      } = params;
+
+      // For now, focus on MD appointments as per R script
+      return this.calculateMDAppointment({
+        distance,
+        duration,
+        age,
+        ha_name,
+        service_type
+      });
     }
 
     // Format cost for display
@@ -1649,7 +2154,331 @@ Generated on: ${new Date().toLocaleString()}
         maximumFractionDigits: 2
       }).format(cost);
     }
+
+    // Get all health authorities
+    getHealthAuthorities() {
+      return Object.keys(this.ha_parking);
+    }
+
+    // Get parking cost for health authority
+    getParkingCost(ha_name) {
+      return this.ha_parking[ha_name] || 3;
+    }
   }
+
+  // Function to check if coordinates are within British Columbia boundaries
+  const isWithinBritishColumbia = (latitude, longitude) => {
+    // British Columbia approximate boundaries
+    // North: ~60°N, South: ~48.5°N, West: ~139°W, East: ~114°W
+    const bcBounds = {
+      north: 60.0,
+      south: 48.5,
+      west: -139.0,
+      east: -114.0
+    };
+    
+    return latitude >= bcBounds.south && 
+           latitude <= bcBounds.north && 
+           longitude >= bcBounds.west && 
+           longitude <= bcBounds.east;
+  };
+
+  // Function to calculate haversine distance between two points
+  const calculateHaversineDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Earth's radius in kilometers
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c; // Distance in kilometers
+  };
+
+  // Start points file upload and processing functions
+  const handleStartPointsFileSelect = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      if (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
+          file.type === 'application/vnd.ms-excel' ||
+          file.type === 'text/csv' ||
+          file.name.endsWith('.xlsx') ||
+          file.name.endsWith('.xls') ||
+          file.name.endsWith('.csv')) {
+        processStartPointsFile(file);
+      } else {
+        setSnackbar({ open: true, message: 'Please select a valid Excel or CSV file (.xlsx, .xls, or .csv)', severity: 'error' });
+      }
+    }
+  };
+
+  const processStartPointsFile = async (file) => {
+    setIsProcessingStartPointsFile(true);
+    setStartPointsUploadProgress(0);
+
+    try {
+      // Read the file as text (CSV format)
+      const text = await file.text();
+      const lines = text.split('\n');
+      
+      console.log('Start points file content preview:', lines.slice(0, 3));
+      
+      // Find header row and column indices
+      const headerRow = lines[0];
+      const headers = headerRow.split(',').map(h => h.trim().replace(/"/g, ''));
+      
+      console.log('Found start points headers:', headers);
+      
+      // Look for required columns
+      const titleIndex = headers.findIndex(h => 
+        h.toLowerCase().includes('title') || 
+        h.toLowerCase().includes('name') ||
+        h.toLowerCase().includes('community')
+      );
+      
+      const latitudeIndex = headers.findIndex(h => 
+        h.toLowerCase().includes('latitude') || 
+        h.toLowerCase().includes('lat')
+      );
+      
+      const longitudeIndex = headers.findIndex(h => 
+        h.toLowerCase().includes('longitude') || 
+        h.toLowerCase().includes('long') ||
+        h.toLowerCase().includes('lng')
+      );
+
+      console.log('Title column index:', titleIndex, 'Latitude column index:', latitudeIndex, 'Longitude column index:', longitudeIndex);
+
+      if (titleIndex === -1 || latitudeIndex === -1 || longitudeIndex === -1) {
+        const foundColumns = headers.join(', ');
+        throw new Error(`Required columns not found. Found columns: ${foundColumns}. Looking for columns containing "Title" or "Name", "Latitude" or "Lat", and "Longitude" or "Long".`);
+      }
+
+      // Process data rows
+      const startPoints = [];
+      const totalRows = lines.length - 1; // Exclude header
+      
+      for (let i = 1; i < lines.length; i++) {
+        if (lines[i].trim()) {
+          const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
+          const title = values[titleIndex];
+          const latitude = parseFloat(values[latitudeIndex]);
+          const longitude = parseFloat(values[longitudeIndex]);
+          
+          if (title && !isNaN(latitude) && !isNaN(longitude)) {
+            startPoints.push({ title, latitude, longitude });
+          }
+        }
+        
+        // Update progress
+        setStartPointsUploadProgress((i / totalRows) * 100);
+      }
+
+      console.log('Found start points:', startPoints.length);
+
+      // Convert to start point format
+      const formattedStartPoints = startPoints.map((point, index) => ({
+        id: `startpoint-${Date.now()}-${index}`,
+        name: point.title,
+        type: 'start',
+        latitude: point.latitude,
+        longitude: point.longitude,
+        address: `${point.title} (${point.latitude.toFixed(4)}, ${point.longitude.toFixed(4)})`,
+        description: 'Uploaded start point'
+      }));
+
+      // Add start points to the map
+      setUploadedStartPoints(prev => [...prev, ...formattedStartPoints]);
+      
+      if (formattedStartPoints.length > 0) {
+        setSnackbar({ 
+          open: true, 
+          message: `Successfully added ${formattedStartPoints.length} start points to the map`, 
+          severity: 'success' 
+        });
+      } else {
+        setSnackbar({ 
+          open: true, 
+          message: 'No valid start points found in the file. Please check the format.', 
+          severity: 'warning' 
+        });
+      }
+
+    } catch (error) {
+      console.error('Error processing start points file:', error);
+      setSnackbar({ 
+        open: true, 
+        message: `Error processing start points file: ${error.message}`, 
+        severity: 'error' 
+      });
+    } finally {
+      setIsProcessingStartPointsFile(false);
+      setStartPointsUploadProgress(0);
+    }
+  };
+
+  const removeUploadedStartPoints = () => {
+    setUploadedStartPoints([]);
+    setSnackbar({ open: true, message: 'All uploaded start points removed', severity: 'info' });
+  };
+
+  const removeUploadedStartPoint = (startPointId) => {
+    setUploadedStartPoints(prev => prev.filter(point => point.id !== startPointId));
+    setSnackbar({ open: true, message: 'Start point removed successfully', severity: 'success' });
+  };
+
+  // Encounters file handling functions
+  const handleEncountersFileSelect = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      if (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
+          file.type === 'application/vnd.ms-excel' ||
+          file.type === 'text/csv' ||
+          file.name.endsWith('.xlsx') ||
+          file.name.endsWith('.xls') ||
+          file.name.endsWith('.csv')) {
+        setSelectedEncountersFile(file);
+        setEncountersDialogOpen(true);
+      } else {
+        setSnackbar({ open: true, message: 'Please select a valid Excel or CSV file (.xlsx, .xls, or .csv)', severity: 'error' });
+      }
+    }
+  };
+
+  const processEncountersFile = async () => {
+    if (!selectedEncountersFile) return;
+
+    setIsProcessingEncountersFile(true);
+    setEncountersUploadProgress(0);
+    setEncountersDialogOpen(false);
+
+    try {
+      // Read the file as text (CSV format)
+      const text = await selectedEncountersFile.text();
+      const lines = text.split('\n');
+      
+      console.log('Encounters file content preview:', lines.slice(0, 3));
+      
+      // Find header row and column indices
+      const headerRow = lines[0];
+      const headers = headerRow.split(',').map(h => h.trim().replace(/"/g, ''));
+      
+      console.log('Found encounters headers:', headers);
+      
+      // Look for required columns
+      const communityIndex = headers.findIndex(h => 
+        h.toLowerCase().includes('community') || 
+        h.toLowerCase().includes('location') ||
+        h.toLowerCase().includes('name')
+      );
+      
+      const ageGroupIndex = headers.findIndex(h => 
+        h.toLowerCase().includes('age group') || 
+        h.toLowerCase().includes('agegroup') ||
+        h.toLowerCase().includes('age') ||
+        h.toLowerCase().includes('age_group')
+      );
+      
+      const encounterIndex = headers.findIndex(h => 
+        h.toLowerCase().includes('encounter') || 
+        h.toLowerCase().includes('count') ||
+        h.toLowerCase().includes('number') ||
+        h.toLowerCase().includes('visits')
+      );
+
+      console.log('Community column index:', communityIndex, 'Age Group column index:', ageGroupIndex, 'Encounter column index:', encounterIndex);
+
+      if (communityIndex === -1 || ageGroupIndex === -1 || encounterIndex === -1) {
+        const foundColumns = headers.join(', ');
+        throw new Error(`Required columns not found. Found columns: ${foundColumns}. Looking for columns containing "Community", "Age Group", and "Encounter".`);
+      }
+
+      // Process data rows
+      const encounters = [];
+      const totalRows = lines.length - 1; // Exclude header
+      
+      for (let i = 1; i < lines.length; i++) {
+        if (lines[i].trim()) {
+          const values = lines[i].split(',').map(v => v.trim().replace(/"/g, ''));
+          const community = values[communityIndex];
+          const ageGroup = values[ageGroupIndex];
+          const encounterCount = parseInt(values[encounterIndex]);
+          
+          if (community && ageGroup && !isNaN(encounterCount) && encounterCount > 0) {
+            // Normalize age group format
+            let normalizedAgeGroup = ageGroup;
+            if (ageGroup.includes('0-14') || ageGroup.includes('child')) {
+              normalizedAgeGroup = '0-14';
+            } else if (ageGroup.includes('15-64') || ageGroup.includes('adult') || ageGroup.includes('working')) {
+              normalizedAgeGroup = '15-64';
+            } else if (ageGroup.includes('65+') || ageGroup.includes('senior')) {
+              normalizedAgeGroup = '65+';
+            }
+            
+            encounters.push({ 
+              community, 
+              ageGroup: normalizedAgeGroup, 
+              encounters: encounterCount 
+            });
+          }
+        }
+        
+        // Update progress
+        setEncountersUploadProgress((i / totalRows) * 100);
+      }
+
+      console.log('Found encounters:', encounters);
+
+      // Validate that communities match uploaded start points
+      const uploadedCommunityNames = uploadedStartPoints.map(sp => sp.name);
+      const validEncounters = encounters.filter(enc => 
+        uploadedCommunityNames.includes(enc.community)
+      );
+      
+      const invalidCommunities = encounters.filter(enc => 
+        !uploadedCommunityNames.includes(enc.community)
+      ).map(enc => enc.community);
+
+      if (validEncounters.length === 0) {
+        throw new Error(`No encounters found for uploaded communities. Uploaded communities: ${uploadedCommunityNames.join(', ')}. Found communities: ${encounters.map(e => e.community).join(', ')}`);
+      }
+
+      // Add encounters to state
+      setUploadedEncounters(validEncounters);
+      
+      // Prepare success message
+      let message = `Successfully processed ${validEncounters.length} encounter records`;
+      
+      if (invalidCommunities.length > 0) {
+        const uniqueInvalid = [...new Set(invalidCommunities)];
+        message += `. ${uniqueInvalid.length} communities were not found in uploaded start points and were excluded: ${uniqueInvalid.join(', ')}`;
+      }
+      
+      setSnackbar({ 
+        open: true, 
+        message: message, 
+        severity: 'success' 
+      });
+
+    } catch (error) {
+      console.error('Error processing encounters file:', error);
+      setSnackbar({ 
+        open: true, 
+        message: `Error processing encounters file: ${error.message}`, 
+        severity: 'error' 
+      });
+    } finally {
+      setIsProcessingEncountersFile(false);
+      setEncountersUploadProgress(0);
+      setSelectedEncountersFile(null);
+    }
+  };
+
+  const removeUploadedEncounters = () => {
+    setUploadedEncounters([]);
+    setSnackbar({ open: true, message: 'All encounter data removed', severity: 'info' });
+  };
 
   return (
     <Box m="20px">
@@ -1661,10 +2490,32 @@ Generated on: ${new Date().toLocaleString()}
         subtitle="Interactive custom map with location management and routing" 
       />
 
+      {/* Page Description */}
+      <Box 
+        sx={{ 
+          background: `linear-gradient(135deg, ${safeColors.primary[400]} 0%, ${safeColors.primary[600]} 100%)`,
+          borderRadius: 3,
+          p: 4,
+          mb: 4,
+          border: `2px solid ${safeColors.blueAccent[500]}`,
+          boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+        }}
+      >
+        <Typography variant="h4" color="grey.100" mb={3} fontWeight="bold" textAlign="center">
+          Custom Travel Scenario Analysis
+        </Typography>
+        <Typography variant="h6" color="grey.300" lineHeight={1.8} textAlign="center" sx={{ maxWidth: '1200px', mx: 'auto' }}>
+          The inputs uploaded to the GEOFFE platform are used to generate a report that users can download which summarizes the changes in the distance patients need to travel, the costs they have to pay including lost productivity, informal caregiving, out-of-pocket expenses related to medical travel.
+        </Typography>
+        <Typography variant="body1" color="grey.400" mt={2} textAlign="center" sx={{ fontStyle: 'italic' }}>
+          Upload your start points, labs, and encounter data to create a comprehensive cost analysis for your healthcare travel scenario.
+        </Typography>
+      </Box>
+
       <Grid container spacing={3}>
         {/* Map Section */}
         <Grid item xs={12} lg={8}>
-          <Card sx={{ height: '70vh', backgroundColor: colors.primary[400] }}>
+          <Card sx={{ height: '70vh', backgroundColor: safeColors.primary[400] }}>
             <CardContent sx={{ p: 0, height: '100%', position: 'relative' }}>
               <Box sx={{ height: '100%', width: '100%' }}>
                 <MapContainer
@@ -1732,9 +2583,9 @@ Generated on: ${new Date().toLocaleString()}
                               startIcon={<RouteIcon />}
                               onClick={() => addToRoute(clinic)}
                               sx={{
-                                backgroundColor: colors.blueAccent[600],
+                                backgroundColor: safeColors.blueAccent[600],
                                 color: 'white',
-                                '&:hover': { backgroundColor: colors.blueAccent[700] }
+                                '&:hover': { backgroundColor: safeColors.blueAccent[700] }
                               }}
                             >
                               Add to Route
@@ -1791,9 +2642,9 @@ Generated on: ${new Date().toLocaleString()}
                               startIcon={<RouteIcon />}
                               onClick={addStartPointToRoute}
                               sx={{
-                                backgroundColor: colors.blueAccent[600],
+                                backgroundColor: safeColors.blueAccent[600],
                                 color: 'white',
-                                '&:hover': { backgroundColor: colors.blueAccent[700] }
+                                '&:hover': { backgroundColor: safeColors.blueAccent[700] }
                               }}
                             >
                               Add to Route
@@ -1859,9 +2710,68 @@ Generated on: ${new Date().toLocaleString()}
                               startIcon={<RouteIcon />}
                               onClick={() => addToRoute(lab)}
                               sx={{
-                                backgroundColor: colors.blueAccent[600],
+                                backgroundColor: safeColors.blueAccent[600],
                                 color: 'white',
-                                '&:hover': { backgroundColor: colors.blueAccent[700] }
+                                '&:hover': { backgroundColor: safeColors.blueAccent[700] }
+                              }}
+                            >
+                              Add to Route
+                            </Button>
+                          </Box>
+                        </Box>
+                      </Popup>
+                    </Marker>
+                  ))}
+
+                  {/* Uploaded Start Points markers */}
+                  {uploadedStartPoints.map((startPoint) => (
+                    <Marker
+                      key={startPoint.id}
+                      position={[startPoint.latitude, startPoint.longitude]}
+                      icon={createCustomIcon('start')}
+                      eventHandlers={{
+                        click: () => setSelectedClinic(startPoint),
+                      }}
+                    >
+                      <Popup>
+                        <Box sx={{ minWidth: 200 }}>
+                          <Typography variant="h6" fontWeight="bold" mb={1}>
+                            {startPoint.name}
+                          </Typography>
+                          <Chip
+                            label="Start Point"
+                            size="small"
+                            sx={{
+                              backgroundColor: '#00FF00',
+                              color: 'white',
+                              mb: 1
+                            }}
+                          />
+                          <Typography variant="body2" mb={1}>
+                            {startPoint.address}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {startPoint.description}
+                          </Typography>
+                          <Box mt={1}>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="error"
+                              onClick={() => removeUploadedStartPoint(startPoint.id)}
+                              sx={{ mr: 1 }}
+                            >
+                              Remove
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              startIcon={<RouteIcon />}
+                              onClick={() => addToRoute(startPoint)}
+                              sx={{
+                                backgroundColor: safeColors.blueAccent[600],
+                                color: 'white',
+                                '&:hover': { backgroundColor: safeColors.blueAccent[700] }
                               }}
                             >
                               Add to Route
@@ -1904,12 +2814,12 @@ Generated on: ${new Date().toLocaleString()}
                 startIcon={<AddLocationIcon />}
                 onClick={handleAddClinic}
                 sx={{
-                  backgroundColor: colors.greenAccent[600],
+                  backgroundColor: safeColors.greenAccent[600],
                   color: 'white',
                   fontSize: '16px',
                   fontWeight: 'bold',
                   padding: '12px',
-                  '&:hover': { backgroundColor: colors.greenAccent[700] }
+                  '&:hover': { backgroundColor: safeColors.greenAccent[700] }
                 }}
               >
                 Add New Location
@@ -1918,10 +2828,10 @@ Generated on: ${new Date().toLocaleString()}
 
             {/* Start Point Controls */}
             <Grid item xs={12}>
-              <Card sx={{ backgroundColor: colors.primary[400] }}>
+              <Card sx={{ backgroundColor: safeColors.primary[400] }}>
                 <CardContent>
                   <Typography variant="h6" color="grey.100" mb={2} display="flex" alignItems="center">
-                    <LocationOnIcon sx={{ mr: 1, color: colors.greenAccent[500] }} />
+                    <LocationOnIcon sx={{ mr: 1, color: safeColors.greenAccent[500] }} />
                     Start Point
                   </Typography>
                   
@@ -1947,9 +2857,9 @@ Generated on: ${new Date().toLocaleString()}
                         onClick={() => geocodeAddress(startPointAddress)}
                         disabled={isGeocoding || !startPointAddress.trim()}
                         sx={{
-                          backgroundColor: colors.greenAccent[600],
+                          backgroundColor: safeColors.greenAccent[600],
                           color: 'white',
-                          '&:hover': { backgroundColor: colors.greenAccent[700] }
+                          '&:hover': { backgroundColor: safeColors.greenAccent[700] }
                         }}
                       >
                         {isGeocoding ? 'Finding Location...' : 'Set Start Point'}
@@ -1979,7 +2889,7 @@ Generated on: ${new Date().toLocaleString()}
                             size="small"
                             variant="outlined"
                             onClick={addStartPointToRoute}
-                            sx={{ color: colors.blueAccent[300], borderColor: colors.blueAccent[300] }}
+                            sx={{ color: safeColors.blueAccent[300], borderColor: safeColors.blueAccent[300] }}
                           >
                             Add to Route
                           </Button>
@@ -2002,27 +2912,228 @@ Generated on: ${new Date().toLocaleString()}
               </Card>
             </Grid>
 
-            {/* File Upload Controls */}
+            {/* Start Points Upload Controls */}
             <Grid item xs={12}>
-              <Card sx={{ backgroundColor: colors.primary[400] }}>
+              <Card sx={{ backgroundColor: safeColors.primary[400] }}>
                 <CardContent>
                   <Typography variant="h6" color="grey.100" mb={2} display="flex" alignItems="center">
-                    <ScienceIcon sx={{ mr: 1, color: colors.blueAccent[500] }} />
+                    <LocationOnIcon sx={{ mr: 1, color: safeColors.redAccent[500] }} />
+                    Upload Start Points
+                  </Typography>
+                  
+                  <Box
+                    sx={{
+                      border: '2px dashed',
+                      borderColor: isDragOverStartPoints ? safeColors.redAccent[300] : safeColors.primary[300],
+                      borderRadius: '8px',
+                      p: 4,
+                      textAlign: 'center',
+                      cursor: 'pointer',
+                      backgroundColor: isDragOverStartPoints ? safeColors.primary[500] : 'transparent',
+                      '&:hover': {
+                        borderColor: isDragOverStartPoints ? safeColors.redAccent[400] : safeColors.primary[400],
+                        backgroundColor: isDragOverStartPoints ? safeColors.primary[500] : safeColors.primary[500],
+                      },
+                      transition: 'all 0.3s ease-in-out',
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragOverStartPoints(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      setIsDragOverStartPoints(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDragOverStartPoints(false);
+                      const file = e.dataTransfer.files[0];
+                      if (file) {
+                        handleStartPointsFileSelect({ target: { files: [file] } });
+                      }
+                    }}
+                    onClick={() => {
+                      document.getElementById('startpoints-file-upload').click();
+                    }}
+                  >
+                    <input
+                      accept=".xlsx,.xls,text/csv"
+                      style={{ display: 'none' }}
+                      id="startpoints-file-upload"
+                      type="file"
+                      onChange={handleStartPointsFileSelect}
+                    />
+                    <UploadFileIcon sx={{ fontSize: 40, color: isDragOverStartPoints ? safeColors.redAccent[400] : safeColors.redAccent[300], mb: 1 }} />
+                    <Typography variant="body2" color="grey.300" mb={1}>
+                      {isDragOverStartPoints ? 'Drop Excel or CSV file here' : 'Drag & drop Excel or CSV file here, or click to select'}
+                    </Typography>
+                    <Typography variant="caption" color="grey.400">
+                      Required columns: Title, Community Latitude, Community Longitude
+                    </Typography>
+                  </Box>
+                  
+                  {uploadedStartPoints.length > 0 && (
+                    <Box>
+                      <Typography variant="body2" color="grey.300" mb={1}>
+                        Uploaded Start Points: {uploadedStartPoints.length}
+                      </Typography>
+                      <Button
+                        fullWidth
+                        size="small"
+                        variant="outlined"
+                        color="error"
+                        onClick={removeUploadedStartPoints}
+                      >
+                        Remove All Start Points
+                      </Button>
+                    </Box>
+                  )}
+                    
+                  {isProcessingStartPointsFile && (
+                    <Box mt={2}>
+                      <Typography variant="body2" color="grey.300" mb={1}>
+                        Processing start points file... {Math.round(startPointsUploadProgress)}%
+                      </Typography>
+                      <LinearProgress 
+                        variant="determinate" 
+                        value={startPointsUploadProgress} 
+                        sx={{ 
+                          backgroundColor: safeColors.primary[500],
+                          '& .MuiLinearProgress-bar': {
+                            backgroundColor: safeColors.redAccent[500]
+                          }
+                        }}
+                      />
+                    </Box>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
+
+            {/* Encounters Upload Controls */}
+            {uploadedStartPoints.length > 0 && (
+              <Grid item xs={12}>
+                <Card sx={{ backgroundColor: safeColors.primary[400] }}>
+                  <CardContent>
+                    <Typography variant="h6" color="grey.100" mb={2} display="flex" alignItems="center">
+                      <AttachMoneyIcon sx={{ mr: 1, color: safeColors.greenAccent[500] }} />
+                      Upload Encounters Data
+                    </Typography>
+                    
+                    <Box
+                      sx={{
+                        border: '2px dashed',
+                        borderColor: isDragOverEncounters ? safeColors.greenAccent[300] : safeColors.primary[300],
+                        borderRadius: '8px',
+                        p: 4,
+                        textAlign: 'center',
+                        cursor: 'pointer',
+                        backgroundColor: isDragOverEncounters ? safeColors.primary[500] : 'transparent',
+                        '&:hover': {
+                          borderColor: isDragOverEncounters ? safeColors.greenAccent[400] : safeColors.primary[400],
+                          backgroundColor: isDragOverEncounters ? safeColors.primary[500] : safeColors.primary[500],
+                        },
+                        transition: 'all 0.3s ease-in-out',
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setIsDragOverEncounters(true);
+                      }}
+                      onDragLeave={(e) => {
+                        e.preventDefault();
+                        setIsDragOverEncounters(false);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setIsDragOverEncounters(false);
+                        const file = e.dataTransfer.files[0];
+                        if (file) {
+                          handleEncountersFileSelect({ target: { files: [file] } });
+                        }
+                      }}
+                      onClick={() => {
+                        document.getElementById('encounters-file-upload').click();
+                      }}
+                    >
+                      <input
+                        accept=".xlsx,.xls,text/csv"
+                        style={{ display: 'none' }}
+                        id="encounters-file-upload"
+                        type="file"
+                        onChange={handleEncountersFileSelect}
+                      />
+                      <UploadFileIcon sx={{ fontSize: 40, color: isDragOverEncounters ? safeColors.greenAccent[400] : safeColors.greenAccent[300], mb: 1 }} />
+                      <Typography variant="body2" color="grey.300" mb={1}>
+                        {isDragOverEncounters ? 'Drop Excel or CSV file here' : 'Drag & drop Excel or CSV file here, or click to select'}
+                      </Typography>
+                      <Typography variant="caption" color="grey.400">
+                        Required columns: Community, Age Group (0-14, 15-64, 65+), Encounter
+                      </Typography>
+                    </Box>
+                    
+                    {uploadedEncounters.length > 0 && (
+                      <Box>
+                        <Typography variant="body2" color="grey.300" mb={1}>
+                          Uploaded Encounters: {uploadedEncounters.length} records
+                        </Typography>
+                        <Typography variant="body2" color="grey.300" mb={1}>
+                          Total Encounters: {uploadedEncounters.reduce((sum, enc) => sum + enc.encounters, 0)}
+                        </Typography>
+                        <Button
+                          fullWidth
+                          size="small"
+                          variant="outlined"
+                          color="error"
+                          onClick={removeUploadedEncounters}
+                        >
+                          Remove All Encounters
+                        </Button>
+                      </Box>
+                    )}
+                      
+                    {isProcessingEncountersFile && (
+                      <Box mt={2}>
+                        <Typography variant="body2" color="grey.300" mb={1}>
+                          Processing encounters file... {Math.round(encountersUploadProgress)}%
+                        </Typography>
+                        <LinearProgress 
+                          variant="determinate" 
+                          value={encountersUploadProgress} 
+                          sx={{ 
+                            backgroundColor: safeColors.primary[500],
+                            '& .MuiLinearProgress-bar': {
+                              backgroundColor: safeColors.greenAccent[500]
+                            }
+                          }}
+                        />
+                      </Box>
+                    )}
+                  </CardContent>
+                </Card>
+              </Grid>
+            )}
+
+            {/* File Upload Controls */}
+            <Grid item xs={12}>
+              <Card sx={{ backgroundColor: safeColors.primary[400] }}>
+                <CardContent>
+                  <Typography variant="h6" color="grey.100" mb={2} display="flex" alignItems="center">
+                    <ScienceIcon sx={{ mr: 1, color: safeColors.blueAccent[500] }} />
                     Upload Labs
                   </Typography>
                   
                   <Box
                     sx={{
                       border: '2px dashed',
-                      borderColor: isDragOver ? colors.blueAccent[300] : colors.primary[300],
+                      borderColor: isDragOver ? safeColors.blueAccent[300] : safeColors.primary[300],
                       borderRadius: '8px',
                       p: 4,
                       textAlign: 'center',
                       cursor: 'pointer',
-                      backgroundColor: isDragOver ? colors.primary[500] : 'transparent',
+                      backgroundColor: isDragOver ? safeColors.primary[500] : 'transparent',
                       '&:hover': {
-                        borderColor: isDragOver ? colors.blueAccent[400] : colors.primary[400],
-                        backgroundColor: isDragOver ? colors.primary[500] : colors.primary[500],
+                        borderColor: isDragOver ? safeColors.blueAccent[400] : safeColors.primary[400],
+                        backgroundColor: isDragOver ? safeColors.primary[500] : safeColors.primary[500],
                       },
                       transition: 'all 0.3s ease-in-out',
                     }}
@@ -2053,7 +3164,7 @@ Generated on: ${new Date().toLocaleString()}
                       type="file"
                       onChange={handleFileSelect}
                     />
-                    <UploadFileIcon sx={{ fontSize: 40, color: isDragOver ? colors.blueAccent[400] : colors.blueAccent[300], mb: 1 }} />
+                    <UploadFileIcon sx={{ fontSize: 40, color: isDragOver ? safeColors.blueAccent[400] : safeColors.blueAccent[300], mb: 1 }} />
                     <Typography variant="body2" color="grey.300" mb={1}>
                       {isDragOver ? 'Drop Excel or CSV file here' : 'Drag & drop Excel or CSV file here, or click to select'}
                     </Typography>
@@ -2088,9 +3199,9 @@ Generated on: ${new Date().toLocaleString()}
                         variant="determinate" 
                         value={uploadProgress} 
                         sx={{ 
-                          backgroundColor: colors.primary[500],
+                          backgroundColor: safeColors.primary[500],
                           '& .MuiLinearProgress-bar': {
-                            backgroundColor: colors.blueAccent[500]
+                            backgroundColor: safeColors.blueAccent[500]
                           }
                         }}
                       />
@@ -2101,19 +3212,22 @@ Generated on: ${new Date().toLocaleString()}
             </Grid>
 
             {/* Start Point to Labs Routing */}
-            {startPoint && uploadedLabs.length > 0 && (
+            {(startPoint || uploadedStartPoints.length > 0) && uploadedLabs.length > 0 && (
               <Grid item xs={12}>
-                <Card sx={{ backgroundColor: colors.primary[400] }}>
+                <Card sx={{ backgroundColor: safeColors.primary[400] }}>
                   <CardContent>
                     <Typography variant="h6" color="grey.100" mb={2} display="flex" alignItems="center">
                       <RouteIcon sx={{ mr: 1, color: '#FF6B6B' }} />
-                      Start to Labs Routes
+                      Start to Labs Analysis
                     </Typography>
                     
                     {!showStartToLabsRoutes ? (
                       <Box>
                         <Typography variant="body2" color="grey.300" mb={2}>
-                          Calculate routes from start point to all {uploadedLabs.length} labs
+                          {uploadedStartPoints.length > 0 
+                            ? `Analyze routes from ${uploadedStartPoints.length} start points to find closest labs`
+                            : `Calculate routes from start point to all ${uploadedLabs.length} labs`
+                          }
                         </Typography>
                         <Button
                           fullWidth
@@ -2126,14 +3240,14 @@ Generated on: ${new Date().toLocaleString()}
                             '&:hover': { backgroundColor: '#FF5252' }
                           }}
                         >
-                          {isCalculatingStartToLabs ? 'Calculating Routes...' : 'Show Routes to All Labs'}
+                          {isCalculatingStartToLabs ? 'Analyzing Routes...' : 'Analyze Routes to Labs'}
                         </Button>
                       </Box>
                     ) : (
                       <Box>
                         <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
                           <Typography variant="body2" color="grey.300">
-                            Routes calculated: {startToLabsRoutes.length}
+                            Analysis complete: {startPointLabAnalysis.length} start points analyzed
                           </Typography>
                           <Button
                             size="small"
@@ -2141,20 +3255,20 @@ Generated on: ${new Date().toLocaleString()}
                             onClick={clearStartToLabsRoutes}
                             sx={{ color: '#FF6B6B', borderColor: '#FF6B6B' }}
                           >
-                            Clear Routes
+                            Clear Analysis
                           </Button>
                         </Box>
                         
                         {isCalculatingStartToLabs && (
                           <Box mb={2}>
                             <Typography variant="body2" color="grey.300" mb={1}>
-                              Calculating routes... {Math.round(startToLabsProgress)}%
+                              Analyzing routes... {Math.round(startToLabsProgress)}%
                             </Typography>
                             <LinearProgress 
                               variant="determinate" 
                               value={startToLabsProgress} 
                               sx={{ 
-                                backgroundColor: colors.primary[500],
+                                backgroundColor: safeColors.primary[500],
                                 '& .MuiLinearProgress-bar': {
                                   backgroundColor: '#FF6B6B'
                                 }
@@ -2163,45 +3277,98 @@ Generated on: ${new Date().toLocaleString()}
                           </Box>
                         )}
                         
-                        <List dense>
-                          {startToLabsRoutes.map((route, index) => (
-                            <ListItem key={route.id} sx={{ px: 0, py: 0.5 }}>
-                              <ListItemText
-                                primary={
-                                  <Typography variant="body2" color="grey.100" fontWeight="bold">
-                                    {index + 1}. {route.to.name}
-                                  </Typography>
-                                }
-                                secondary={
-                                  <Typography variant="caption" color="grey.400">
-                                    {formatDistance(route.distance)} • {formatDuration(route.duration)}
-                                  </Typography>
-                                }
-                              />
-                            </ListItem>
-                          ))}
-                        </List>
+                        {/* Show analysis results */}
+                        {startPointLabAnalysis.map((analysis, index) => (
+                          <Accordion key={analysis.startPoint.id} sx={{ backgroundColor: safeColors.primary[500], mb: 1 }}>
+                            <AccordionSummary>
+                              <Box display="flex" alignItems="center" justifyContent="space-between" width="100%">
+                                <Typography variant="body2" color="grey.100" fontWeight="bold">
+                                  {index + 1}. {analysis.startPoint.name}
+                                </Typography>
+                                {analysis.closestLabRoute && (
+                                  <Chip
+                                    label={`Closest: ${analysis.closestLabRoute.to.name}`}
+                                    size="small"
+                                    sx={{
+                                      backgroundColor: '#4CAF50',
+                                      color: 'white',
+                                      fontSize: '10px'
+                                    }}
+                                  />
+                                )}
+                              </Box>
+                            </AccordionSummary>
+                            <AccordionDetails>
+                              <Box>
+                                <Typography variant="body2" color="grey.300" mb={1}>
+                                  Top 3 closest labs:
+                                </Typography>
+                                <List dense>
+                                  {analysis.allRoutes.map((route, routeIndex) => (
+                                    <ListItem key={route.id} sx={{ px: 0, py: 0.5 }}>
+                                      <ListItemText
+                                        primary={
+                                          <Typography variant="body2" color="grey.100" fontWeight="bold">
+                                            {routeIndex + 1}. {route.to.name}
+                                          </Typography>
+                                        }
+                                        secondary={
+                                          <Typography variant="caption" color="grey.400">
+                                            Haversine: {route.haversineDistance.toFixed(2)} km • 
+                                            Real: {formatDistance(route.realDistance)} • 
+                                            {formatDuration(route.realDuration)}
+                                            {route.rank === 1 && ' (Closest)'}
+                                          </Typography>
+                                        }
+                                      />
+                                    </ListItem>
+                                  ))}
+                                </List>
+                              </Box>
+                            </AccordionDetails>
+                          </Accordion>
+                        ))}
                         
-                        {startToLabsRoutes.length > 0 && (
-                          <Box mt={2} p={2} sx={{ backgroundColor: colors.primary[500], borderRadius: 1 }}>
+                        {startPointLabAnalysis.length > 0 && (
+                          <Box mt={2} p={2} sx={{ backgroundColor: safeColors.primary[500], borderRadius: 1 }}>
                             <Typography variant="h6" color="grey.100" mb={1}>
-                              Total Summary
+                              Analysis Summary
                             </Typography>
                             <Grid container spacing={1}>
                               <Grid item xs={6}>
                                 <Typography variant="body2" color="grey.300">
-                                  Total Distance:
+                                  Start Points:
                                 </Typography>
                                 <Typography variant="body1" color="grey.100" fontWeight="bold">
-                                  {formatDistance(startToLabsRoutes.reduce((sum, route) => sum + route.distance, 0))}
+                                  {startPointLabAnalysis.length}
                                 </Typography>
                               </Grid>
                               <Grid item xs={6}>
                                 <Typography variant="body2" color="grey.300">
-                                  Total Duration:
+                                  Total Routes:
                                 </Typography>
                                 <Typography variant="body1" color="grey.100" fontWeight="bold">
-                                  {formatDuration(startToLabsRoutes.reduce((sum, route) => sum + route.duration, 0))}
+                                  {startToLabsRoutes.length}
+                                </Typography>
+                              </Grid>
+                              <Grid item xs={6}>
+                                <Typography variant="body2" color="grey.300">
+                                  Closest Labs Found:
+                                </Typography>
+                                <Typography variant="body1" color="grey.100" fontWeight="bold">
+                                  {startPointLabAnalysis.filter(r => r.closestLabRoute).length}
+                                </Typography>
+                              </Grid>
+                              <Grid item xs={6}>
+                                <Typography variant="body2" color="grey.300">
+                                  Average Distance:
+                                </Typography>
+                                <Typography variant="body1" color="grey.100" fontWeight="bold">
+                                  {startPointLabAnalysis.length > 0 
+                                    ? formatDistance(startPointLabAnalysis.reduce((sum, analysis) => 
+                                        sum + (analysis.closestLabRoute?.realDistance || 0), 0) / startPointLabAnalysis.length)
+                                    : '0 m'
+                                  }
                                 </Typography>
                               </Grid>
                             </Grid>
@@ -2215,15 +3382,15 @@ Generated on: ${new Date().toLocaleString()}
             )}
 
             {/* Cost Calculation Section */}
-            {showStartToLabsRoutes && startToLabsRoutes.length > 0 && (
+            {showStartToLabsRoutes && startPointLabAnalysis.length > 0 && (
               <Grid item xs={12}>
-                <Card sx={{ backgroundColor: colors.primary[400] }}>
+                <Card sx={{ backgroundColor: safeColors.primary[400] }}>
                   <CardContent>
                     <Box display="flex" alignItems="center" justifyContent="space-between" mb={3}>
                       <Box display="flex" alignItems="center" gap={1}>
                         <AttachMoneyIcon sx={{ color: '#FF6B6B' }} />
                         <Typography variant="h6" color="grey.100" fontWeight="bold">
-                          Lab Visit Cost Analysis
+                          MD Appointment Cost Analysis
                         </Typography>
                       </Box>
                       <Box display="flex" gap={1}>
@@ -2245,7 +3412,7 @@ Generated on: ${new Date().toLocaleString()}
                     {showCostCalculation && costResults && (
                       <Box>
                         {/* Download Options */}
-                        <Box mb={3} p={2} sx={{ backgroundColor: colors.primary[600], borderRadius: 1 }}>
+                        <Box mb={3} p={2} sx={{ backgroundColor: safeColors.primary[600], borderRadius: 1 }}>
                           <Typography variant="h6" color="grey.100" mb={2}>
                             Download Options
                           </Typography>
@@ -2372,6 +3539,71 @@ Generated on: ${new Date().toLocaleString()}
                               />
                             </Grid>
                           </Grid>
+                          
+                          {/* Encounters Information */}
+                          {costResults.encounters.hasData && (
+                            <Box mt={2} p={2} sx={{ backgroundColor: safeColors.primary[600], borderRadius: 1, border: '2px solid #FF9800' }}>
+                              <Typography variant="h6" color="grey.100" mb={1} display="flex" alignItems="center">
+                                <AttachMoneyIcon sx={{ mr: 1, color: '#FF9800' }} />
+                                Encounters Data Applied
+                              </Typography>
+                              <Grid container spacing={2}>
+                                <Grid item xs={6} md={3}>
+                                  <Typography variant="body2" color="grey.300">
+                                    Total Encounters:
+                                  </Typography>
+                                  <Typography variant="h6" color="#FF9800" fontWeight="bold">
+                                    {costResults.encounters.totalEncounters.toLocaleString()}
+                                  </Typography>
+                                </Grid>
+                                <Grid item xs={6} md={3}>
+                                  <Typography variant="body2" color="grey.300">
+                                    Communities:
+                                  </Typography>
+                                  <Typography variant="h6" color="#FF9800" fontWeight="bold">
+                                    {costResults.encounters.communitiesWithEncounters}
+                                  </Typography>
+                                </Grid>
+                                <Grid item xs={6} md={3}>
+                                  <Typography variant="body2" color="grey.300">
+                                    Child Encounters:
+                                  </Typography>
+                                  <Typography variant="h6" color="#FF9800" fontWeight="bold">
+                                    {costResults.encounters.data.filter(enc => enc.ageGroup === '0-14').reduce((sum, enc) => sum + enc.encounters, 0).toLocaleString()}
+                                  </Typography>
+                                </Grid>
+                                <Grid item xs={6} md={3}>
+                                  <Typography variant="body2" color="grey.300">
+                                    Adult Encounters:
+                                  </Typography>
+                                  <Typography variant="h6" color="#FF9800" fontWeight="bold">
+                                    {costResults.encounters.data.filter(enc => enc.ageGroup === '15-64').reduce((sum, enc) => sum + enc.encounters, 0).toLocaleString()}
+                                  </Typography>
+                                </Grid>
+                                <Grid item xs={6} md={3}>
+                                  <Typography variant="body2" color="grey.300">
+                                    Senior Encounters:
+                                  </Typography>
+                                  <Typography variant="h6" color="#FF9800" fontWeight="bold">
+                                    {costResults.encounters.data.filter(enc => enc.ageGroup === '65+').reduce((sum, enc) => sum + enc.encounters, 0).toLocaleString()}
+                                  </Typography>
+                                </Grid>
+                                <Grid item xs={6} md={3}>
+                                  <Typography variant="body2" color="grey.300">
+                                    Cost Multiplier:
+                                  </Typography>
+                                  <Typography variant="h6" color="#FF9800" fontWeight="bold">
+                                    {costResults.encounters.totalEncounters > 0 ? 
+                                      (costResults.encounters.totalEncounters / costResults.summary.totalStartPoints).toFixed(1) + 'x' : '1x'
+                                    }
+                                  </Typography>
+                                </Grid>
+                              </Grid>
+                              <Typography variant="body2" color="grey.300" mt={1}>
+                                <strong>Note:</strong> All costs shown below are multiplied by encounter counts for realistic total estimates.
+                              </Typography>
+                            </Box>
+                          )}
                         </Box>
 
                         {/* Cost Results by Age Group */}
@@ -2381,7 +3613,7 @@ Generated on: ${new Date().toLocaleString()}
                         <Grid container spacing={2}>
                           {/* Child (0-14) */}
                           <Grid item xs={12} md={4}>
-                            <Paper sx={{ p: 2, backgroundColor: colors.primary[600], border: '2px solid #FF6B6B' }}>
+                            <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #FF6B6B' }}>
                               <Typography variant="h6" color="grey.100" mb={2} textAlign="center">
                                 Children (0-14)
                               </Typography>
@@ -2391,10 +3623,10 @@ Generated on: ${new Date().toLocaleString()}
                                     style: 'currency',
                                     currency: 'CAD',
                                     minimumFractionDigits: 2
-                                  }).format(costResults.child.totalCost)}
+                                  }).format(costResults.child.costs.total)}
                                 </Typography>
                                 <Typography variant="body2" color="grey.300" textAlign="center">
-                                  per lab visit
+                                  per MD appointment
                                 </Typography>
                               </Box>
                               <Box>
@@ -2409,7 +3641,7 @@ Generated on: ${new Date().toLocaleString()}
                                       style: 'currency',
                                       currency: 'CAD',
                                       minimumFractionDigits: 2
-                                    }).format(costResults.child.informalCaregiving)}
+                                    }).format(costResults.child.costs.informalCaregiving)}
                                   </Typography>
                                 </Box>
                                 <Box display="flex" justifyContent="space-between">
@@ -2419,7 +3651,7 @@ Generated on: ${new Date().toLocaleString()}
                                       style: 'currency',
                                       currency: 'CAD',
                                       minimumFractionDigits: 2
-                                    }).format(costResults.child.outOfPocket)}
+                                    }).format(costResults.child.costs.outOfPocket)}
                                   </Typography>
                                 </Box>
                               </Box>
@@ -2428,7 +3660,7 @@ Generated on: ${new Date().toLocaleString()}
 
                           {/* Adult (15-64) */}
                           <Grid item xs={12} md={4}>
-                            <Paper sx={{ p: 2, backgroundColor: colors.primary[600], border: '2px solid #4CAF50' }}>
+                            <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #4CAF50' }}>
                               <Typography variant="h6" color="grey.100" mb={2} textAlign="center">
                                 Working Age (15-64)
                               </Typography>
@@ -2438,10 +3670,10 @@ Generated on: ${new Date().toLocaleString()}
                                     style: 'currency',
                                     currency: 'CAD',
                                     minimumFractionDigits: 2
-                                  }).format(costResults.adult.totalCost)}
+                                  }).format(costResults.adult.costs.total)}
                                 </Typography>
                                 <Typography variant="body2" color="grey.300" textAlign="center">
-                                  per lab visit
+                                  per MD appointment
                                 </Typography>
                               </Box>
                               <Box>
@@ -2452,7 +3684,7 @@ Generated on: ${new Date().toLocaleString()}
                                       style: 'currency',
                                       currency: 'CAD',
                                       minimumFractionDigits: 2
-                                    }).format(costResults.adult.lostProductivity)}
+                                    }).format(costResults.adult.costs.lostProductivity)}
                                   </Typography>
                                 </Box>
                                 <Box display="flex" justifyContent="space-between" mb={1}>
@@ -2462,7 +3694,7 @@ Generated on: ${new Date().toLocaleString()}
                                       style: 'currency',
                                       currency: 'CAD',
                                       minimumFractionDigits: 2
-                                    }).format(costResults.adult.informalCaregiving)}
+                                    }).format(costResults.adult.costs.informalCaregiving)}
                                   </Typography>
                                 </Box>
                                 <Box display="flex" justifyContent="space-between">
@@ -2472,7 +3704,7 @@ Generated on: ${new Date().toLocaleString()}
                                       style: 'currency',
                                       currency: 'CAD',
                                       minimumFractionDigits: 2
-                                    }).format(costResults.adult.outOfPocket)}
+                                    }).format(costResults.adult.costs.outOfPocket)}
                                   </Typography>
                                 </Box>
                               </Box>
@@ -2481,7 +3713,7 @@ Generated on: ${new Date().toLocaleString()}
 
                           {/* Senior (65+) */}
                           <Grid item xs={12} md={4}>
-                            <Paper sx={{ p: 2, backgroundColor: colors.primary[600], border: '2px solid #2196F3' }}>
+                            <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #2196F3' }}>
                               <Typography variant="h6" color="grey.100" mb={2} textAlign="center">
                                 Seniors (65+)
                               </Typography>
@@ -2491,10 +3723,10 @@ Generated on: ${new Date().toLocaleString()}
                                     style: 'currency',
                                     currency: 'CAD',
                                     minimumFractionDigits: 2
-                                  }).format(costResults.senior.totalCost)}
+                                  }).format(costResults.senior.costs.total)}
                                 </Typography>
                                 <Typography variant="body2" color="grey.300" textAlign="center">
-                                  per lab visit
+                                  per MD appointment
                                 </Typography>
                               </Box>
                               <Box>
@@ -2509,7 +3741,7 @@ Generated on: ${new Date().toLocaleString()}
                                       style: 'currency',
                                       currency: 'CAD',
                                       minimumFractionDigits: 2
-                                    }).format(costResults.senior.informalCaregiving)}
+                                    }).format(costResults.senior.costs.informalCaregiving)}
                                   </Typography>
                                 </Box>
                                 <Box display="flex" justifyContent="space-between">
@@ -2519,7 +3751,7 @@ Generated on: ${new Date().toLocaleString()}
                                       style: 'currency',
                                       currency: 'CAD',
                                       minimumFractionDigits: 2
-                                    }).format(costResults.senior.outOfPocket)}
+                                    }).format(costResults.senior.costs.outOfPocket)}
                                   </Typography>
                                 </Box>
                               </Box>
@@ -2527,15 +3759,48 @@ Generated on: ${new Date().toLocaleString()}
                           </Grid>
                         </Grid>
 
-                        {/* Total Costs for All Labs */}
+                        {/* CO2 Emissions Summary */}
                         <Box mt={3}>
                           <Typography variant="h6" color="grey.100" mb={2}>
-                            Total Costs for All {costResults.summary.totalRoutes} Labs
+                            Environmental Impact
+                          </Typography>
+                          <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #4CAF50' }}>
+                            <Grid container spacing={2}>
+                              <Grid item xs={6}>
+                                <Typography variant="body2" color="grey.300">
+                                  Total CO2 Emissions:
+                                </Typography>
+                                <Typography variant="h4" color="#4CAF50" fontWeight="bold">
+                                  {costResults.emissions.totalCO2.toFixed(2)} kg
+                                </Typography>
+                                <Typography variant="body2" color="grey.300">
+                                  for all {costResults.summary.totalStartPoints} start points
+                                </Typography>
+                              </Grid>
+                              <Grid item xs={6}>
+                                <Typography variant="body2" color="grey.300">
+                                  Average CO2 per Trip:
+                                </Typography>
+                                <Typography variant="h4" color="#4CAF50" fontWeight="bold">
+                                  {costResults.emissions.averageCO2.toFixed(2)} kg
+                                </Typography>
+                                <Typography variant="body2" color="grey.300">
+                                  per one-way trip
+                                </Typography>
+                              </Grid>
+                            </Grid>
+                          </Paper>
+                        </Box>
+
+                        {/* Total Costs for All Start Points */}
+                        <Box mt={3}>
+                          <Typography variant="h6" color="grey.100" mb={2}>
+                            Total Costs for All {costResults.summary.totalStartPoints} Start Points
                           </Typography>
                           <Grid container spacing={2}>
                             {/* Child Total */}
                             <Grid item xs={12} md={4}>
-                              <Paper sx={{ p: 2, backgroundColor: colors.primary[600], border: '2px solid #FF6B6B' }}>
+                              <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #FF6B6B' }}>
                                 <Typography variant="h6" color="grey.100" mb={1} textAlign="center">
                                   Children (0-14)
                                 </Typography>
@@ -2547,14 +3812,14 @@ Generated on: ${new Date().toLocaleString()}
                                   }).format(costResults.totals.child)}
                                 </Typography>
                                 <Typography variant="body2" color="grey.300" textAlign="center">
-                                  total for all labs
+                                  total for all start points
                                 </Typography>
                               </Paper>
                             </Grid>
 
                             {/* Adult Total */}
                             <Grid item xs={12} md={4}>
-                              <Paper sx={{ p: 2, backgroundColor: colors.primary[600], border: '2px solid #4CAF50' }}>
+                              <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #4CAF50' }}>
                                 <Typography variant="h6" color="grey.100" mb={1} textAlign="center">
                                   Working Age (15-64)
                                 </Typography>
@@ -2566,14 +3831,14 @@ Generated on: ${new Date().toLocaleString()}
                                   }).format(costResults.totals.adult)}
                                 </Typography>
                                 <Typography variant="body2" color="grey.300" textAlign="center">
-                                  total for all labs
+                                  total for all start points
                                 </Typography>
                               </Paper>
                             </Grid>
 
                             {/* Senior Total */}
                             <Grid item xs={12} md={4}>
-                              <Paper sx={{ p: 2, backgroundColor: colors.primary[600], border: '2px solid #2196F3' }}>
+                              <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #2196F3' }}>
                                 <Typography variant="h6" color="grey.100" mb={1} textAlign="center">
                                   Seniors (65+)
                                 </Typography>
@@ -2585,7 +3850,7 @@ Generated on: ${new Date().toLocaleString()}
                                   }).format(costResults.totals.senior)}
                                 </Typography>
                                 <Typography variant="body2" color="grey.300" textAlign="center">
-                                  total for all labs
+                                  total for all start points
                                 </Typography>
                               </Paper>
                             </Grid>
@@ -2594,7 +3859,7 @@ Generated on: ${new Date().toLocaleString()}
 
                         {/* Grand Total */}
                         <Box mt={3}>
-                          <Paper sx={{ p: 3, backgroundColor: colors.primary[600], border: '3px solid #FFD700' }}>
+                          <Paper sx={{ p: 3, backgroundColor: safeColors.primary[600], border: '3px solid #FFD700' }}>
                             <Typography variant="h5" color="grey.100" mb={2} textAlign="center" fontWeight="bold">
                               Grand Total for All Age Groups
                             </Typography>
@@ -2605,21 +3870,76 @@ Generated on: ${new Date().toLocaleString()}
                                 minimumFractionDigits: 2
                               }).format(costResults.totals.grand)}
                             </Typography>
-                            <Typography variant="body1" color="grey.300" textAlign="center">
-                              Total cost for all {costResults.summary.totalRoutes} labs across all age groups
+                            <Typography variant="body1" color="grey.300" textAlign="center" mb={3}>
+                              Total cost for all {costResults.summary.totalStartPoints} start points across all age groups
                             </Typography>
+                            
+                            {/* Subunit Totals */}
+                            <Grid container spacing={2} mt={2}>
+                              <Grid item xs={12} md={4}>
+                                <Box textAlign="center" p={2} sx={{ backgroundColor: safeColors.primary[500], borderRadius: 1 }}>
+                                  <Typography variant="h6" color="grey.100" mb={1}>
+                                    Lost Productivity
+                                  </Typography>
+                                  <Typography variant="h4" color="#FF6B6B" fontWeight="bold">
+                                    {new Intl.NumberFormat('en-CA', {
+                                      style: 'currency',
+                                      currency: 'CAD',
+                                      minimumFractionDigits: 2
+                                    }).format(costResults.totals.lostProductivity)}
+                                  </Typography>
+                                  <Typography variant="body2" color="grey.300">
+                                    Working age only
+                                  </Typography>
+                                </Box>
+                              </Grid>
+                              <Grid item xs={12} md={4}>
+                                <Box textAlign="center" p={2} sx={{ backgroundColor: safeColors.primary[500], borderRadius: 1 }}>
+                                  <Typography variant="h6" color="grey.100" mb={1}>
+                                    Informal Caregiving
+                                  </Typography>
+                                  <Typography variant="h4" color="#4CAF50" fontWeight="bold">
+                                    {new Intl.NumberFormat('en-CA', {
+                                      style: 'currency',
+                                      currency: 'CAD',
+                                      minimumFractionDigits: 2
+                                    }).format(costResults.totals.informalCaregiving)}
+                                  </Typography>
+                                  <Typography variant="body2" color="grey.300">
+                                    All age groups
+                                  </Typography>
+                                </Box>
+                              </Grid>
+                              <Grid item xs={12} md={4}>
+                                <Box textAlign="center" p={2} sx={{ backgroundColor: safeColors.primary[500], borderRadius: 1 }}>
+                                  <Typography variant="h6" color="grey.100" mb={1}>
+                                    Out of Pocket
+                                  </Typography>
+                                  <Typography variant="h4" color="#2196F3" fontWeight="bold">
+                                    {new Intl.NumberFormat('en-CA', {
+                                      style: 'currency',
+                                      currency: 'CAD',
+                                      minimumFractionDigits: 2
+                                    }).format(costResults.totals.outOfPocket)}
+                                  </Typography>
+                                  <Typography variant="body2" color="grey.300">
+                                    All age groups
+                                  </Typography>
+                                </Box>
+                              </Grid>
+                            </Grid>
                           </Paper>
                         </Box>
 
                         {/* Summary Statistics */}
-                        <Box mt={3} p={2} sx={{ backgroundColor: colors.primary[600], borderRadius: 1 }}>
+                        <Box mt={3} p={2} sx={{ backgroundColor: safeColors.primary[600], borderRadius: 1 }}>
                           <Typography variant="h6" color="grey.100" mb={2}>
                             Summary Statistics
                           </Typography>
                           <Grid container spacing={2}>
                             <Grid item xs={6} md={3}>
-                              <Typography variant="body2" color="grey.300">Total Routes:</Typography>
-                              <Typography variant="h6" color="grey.100">{costResults.summary.totalRoutes}</Typography>
+                              <Typography variant="body2" color="grey.300">Total Start Points:</Typography>
+                              <Typography variant="h6" color="grey.100">{costResults.summary.totalStartPoints}</Typography>
                             </Grid>
                             <Grid item xs={6} md={3}>
                               <Typography variant="body2" color="grey.300">Average Distance:</Typography>
@@ -2636,14 +3956,44 @@ Generated on: ${new Date().toLocaleString()}
                                   style: 'currency',
                                   currency: 'CAD',
                                   minimumFractionDigits: 2
-                                }).format(Math.min(costResults.child.totalCost, costResults.adult.totalCost, costResults.senior.totalCost))} - 
+                                }).format(Math.min(costResults.child.costs.total, costResults.adult.costs.total, costResults.senior.costs.total))} - 
                                 {new Intl.NumberFormat('en-CA', {
                                   style: 'currency',
                                   currency: 'CAD',
                                   minimumFractionDigits: 2
-                                }).format(Math.max(costResults.child.totalCost, costResults.adult.totalCost, costResults.senior.totalCost))}
+                                }).format(Math.max(costResults.child.costs.total, costResults.adult.costs.total, costResults.senior.costs.total))}
                               </Typography>
                             </Grid>
+                            {costResults.encounters.hasData && (
+                              <>
+                                <Grid item xs={6} md={3}>
+                                  <Typography variant="body2" color="grey.300">Total Encounters:</Typography>
+                                  <Typography variant="h6" color="#FF9800">{costResults.encounters.totalEncounters.toLocaleString()}</Typography>
+                                </Grid>
+                                <Grid item xs={6} md={3}>
+                                  <Typography variant="body2" color="grey.300">Avg Encounters/Community:</Typography>
+                                  <Typography variant="h6" color="#FF9800">
+                                    {Math.round(costResults.encounters.totalEncounters / costResults.encounters.communitiesWithEncounters).toLocaleString()}
+                                  </Typography>
+                                </Grid>
+                                <Grid item xs={6} md={3}>
+                                  <Typography variant="body2" color="grey.300">Cost per Encounter:</Typography>
+                                  <Typography variant="h6" color="#FF9800">
+                                    {new Intl.NumberFormat('en-CA', {
+                                      style: 'currency',
+                                      currency: 'CAD',
+                                      minimumFractionDigits: 2
+                                    }).format(costResults.totals.grand / costResults.encounters.totalEncounters)}
+                                  </Typography>
+                                </Grid>
+                                <Grid item xs={6} md={3}>
+                                  <Typography variant="body2" color="grey.300">CO2 per Encounter:</Typography>
+                                  <Typography variant="h6" color="#FF9800">
+                                    {(costResults.emissions.totalCO2 / costResults.encounters.totalEncounters).toFixed(2)} kg
+                                  </Typography>
+                                </Grid>
+                              </>
+                            )}
                           </Grid>
                         </Box>
                       </Box>
@@ -2655,11 +4005,11 @@ Generated on: ${new Date().toLocaleString()}
 
             {/* Route Controls */}
             <Grid item xs={12}>
-              <Card sx={{ backgroundColor: colors.primary[400] }}>
+              <Card sx={{ backgroundColor: safeColors.primary[400] }}>
                 <CardContent>
                   <Box display="flex" alignItems="center" justifyContent="space-between" mb={2}>
                     <Typography variant="h6" color="grey.100" display="flex" alignItems="center">
-                      <RouteIcon sx={{ mr: 1, color: colors.blueAccent[500] }} />
+                      <RouteIcon sx={{ mr: 1, color: safeColors.blueAccent[500] }} />
                       Route Planning
                     </Typography>
                     {routeWaypoints.length > 0 && (
@@ -2668,7 +4018,7 @@ Generated on: ${new Date().toLocaleString()}
                         variant="outlined"
                         startIcon={<ClearIcon />}
                         onClick={clearRoute}
-                        sx={{ color: colors.redAccent[300], borderColor: colors.redAccent[300] }}
+                        sx={{ color: safeColors.redAccent[300], borderColor: safeColors.redAccent[300] }}
                       >
                         Clear
                       </Button>
@@ -2708,7 +4058,7 @@ Generated on: ${new Date().toLocaleString()}
                               <IconButton
                                 size="small"
                                 onClick={() => removeFromRoute(waypoint.id)}
-                                sx={{ color: colors.redAccent[300] }}
+                                sx={{ color: safeColors.redAccent[300] }}
                               >
                                 <DeleteIcon fontSize="small" />
                               </IconButton>
@@ -2718,7 +4068,7 @@ Generated on: ${new Date().toLocaleString()}
                       </List>
                       
                       {routeInfo && routeWaypoints.length >= 2 && (
-                        <Box mt={2} p={2} sx={{ backgroundColor: colors.primary[500], borderRadius: 1 }}>
+                        <Box mt={2} p={2} sx={{ backgroundColor: safeColors.primary[500], borderRadius: 1 }}>
                           <Typography variant="h6" color="grey.100" mb={1}>
                             Route Summary
                           </Typography>
@@ -2744,7 +4094,7 @@ Generated on: ${new Date().toLocaleString()}
                       )}
                       
                       {routeWaypoints.length === 1 && (
-                        <Box mt={2} p={2} sx={{ backgroundColor: colors.primary[500], borderRadius: 1 }}>
+                        <Box mt={2} p={2} sx={{ backgroundColor: safeColors.primary[500], borderRadius: 1 }}>
                           <Typography variant="body2" color="grey.300" textAlign="center">
                             Add another location to see route distance and duration
                           </Typography>
@@ -2758,10 +4108,10 @@ Generated on: ${new Date().toLocaleString()}
 
             {/* Clinic Type Legend */}
             <Grid item xs={12}>
-              <Card sx={{ backgroundColor: colors.primary[400] }}>
+              <Card sx={{ backgroundColor: safeColors.primary[400] }}>
                 <CardContent>
                   <Typography variant="h6" color="grey.100" mb={2} display="flex" alignItems="center">
-                    <MapIcon sx={{ mr: 1, color: colors.blueAccent[500] }} />
+                    <MapIcon sx={{ mr: 1, color: safeColors.blueAccent[500] }} />
                     Location Types
                   </Typography>
                   <Grid container spacing={1}>
@@ -2791,11 +4141,11 @@ Generated on: ${new Date().toLocaleString()}
 
             {/* Clinics List */}
             <Grid item xs={12}>
-              <Card sx={{ backgroundColor: colors.primary[400], maxHeight: '300px', overflow: 'auto' }}>
+              <Card sx={{ backgroundColor: safeColors.primary[400], maxHeight: '300px', overflow: 'auto' }}>
                 <CardContent>
                   <Typography variant="h6" color="grey.100" mb={2} display="flex" alignItems="center">
-                    <LocationOnIcon sx={{ mr: 1, color: colors.blueAccent[500] }} />
-                    Locations ({clinics.length + uploadedLabs.length})
+                    <LocationOnIcon sx={{ mr: 1, color: safeColors.blueAccent[500] }} />
+                    Locations ({clinics.length + uploadedLabs.length + uploadedStartPoints.length})
                   </Typography>
                   <List dense>
                     {clinics.map((clinic) => (
@@ -2821,14 +4171,14 @@ Generated on: ${new Date().toLocaleString()}
                           <IconButton
                             size="small"
                             onClick={() => handleEditClinic(clinic)}
-                            sx={{ color: colors.blueAccent[300] }}
+                            sx={{ color: safeColors.blueAccent[300] }}
                           >
                             <EditIcon fontSize="small" />
                           </IconButton>
                           <IconButton
                             size="small"
                             onClick={() => handleDeleteClinic(clinic.id)}
-                            sx={{ color: colors.redAccent[300] }}
+                            sx={{ color: safeColors.redAccent[300] }}
                           >
                             <DeleteIcon fontSize="small" />
                           </IconButton>
@@ -2858,14 +4208,44 @@ Generated on: ${new Date().toLocaleString()}
                           <IconButton
                             size="small"
                             onClick={() => handleEditLab(lab)}
-                            sx={{ color: colors.blueAccent[300] }}
+                            sx={{ color: safeColors.blueAccent[300] }}
                           >
                             <EditIcon fontSize="small" />
                           </IconButton>
                           <IconButton
                             size="small"
                             onClick={() => removeUploadedLab(lab.id)}
-                            sx={{ color: colors.redAccent[300] }}
+                            sx={{ color: safeColors.redAccent[300] }}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Box>
+                      </ListItem>
+                    ))}
+                    {uploadedStartPoints.map((startPoint) => (
+                      <ListItem key={startPoint.id} sx={{ px: 0 }}>
+                        <ListItemText
+                          primary={
+                            <Typography variant="body2" color="grey.100" fontWeight="bold">
+                              {startPoint.name}
+                            </Typography>
+                          }
+                        />
+                        <Box display="flex" alignItems="center" gap={1}>
+                          <Chip
+                            label="Start Point"
+                            size="small"
+                            sx={{
+                              backgroundColor: '#00FF00',
+                              color: 'white',
+                              fontSize: '10px',
+                              height: '20px'
+                            }}
+                          />
+                          <IconButton
+                            size="small"
+                            onClick={() => removeUploadedStartPoint(startPoint.id)}
+                            sx={{ color: safeColors.redAccent[300] }}
                           >
                             <DeleteIcon fontSize="small" />
                           </IconButton>
@@ -3008,9 +4388,15 @@ Generated on: ${new Date().toLocaleString()}
                 Column names should contain keywords like "name", "lab", "address", "location", etc.
               </Typography>
             </Alert>
-            <Alert severity="info" sx={{ mt: 2 }}>
+            <Alert severity="info" sx={{ mt: 2, mb: 2 }}>
               <Typography variant="body2">
                 <strong>Note:</strong> Geocoding may take some time and includes delays to respect API rate limits.
+              </Typography>
+            </Alert>
+            <Alert severity="info" sx={{ mt: 2 }}>
+              <Typography variant="body2">
+                <strong>BC Boundary Filter:</strong> Only labs located within British Columbia, Canada will be added to the map. 
+                Labs outside BC boundaries will be automatically excluded.
               </Typography>
             </Alert>
           </Box>
@@ -3018,6 +4404,58 @@ Generated on: ${new Date().toLocaleString()}
         <DialogActions>
           <Button onClick={() => setFileUploadDialogOpen(false)}>Cancel</Button>
           <Button onClick={processExcelFile} variant="contained" color="primary">
+            Process File
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Encounters File Upload Confirmation Dialog */}
+      <Dialog open={encountersDialogOpen} onClose={() => setEncountersDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Upload Encounters Data
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="body1" mb={2}>
+              File: <strong>{selectedEncountersFile?.name}</strong>
+            </Typography>
+            <Typography variant="body2" color="text.secondary" mb={2}>
+              This will process the encounters file and multiply costs by encounter counts. The file should contain:
+            </Typography>
+            <Box sx={{ pl: 2 }}>
+              <Typography variant="body2" color="text.secondary" mb={1}>
+                • A column named "Community" (or similar) with community names
+              </Typography>
+              <Typography variant="body2" color="text.secondary" mb={1}>
+                • A column named "Age Group" with values like "0-14", "15-64", "65+"
+              </Typography>
+              <Typography variant="body2" color="text.secondary" mb={1}>
+                • A column named "Encounter" (or similar) with encounter counts
+              </Typography>
+            </Box>
+            <Alert severity="warning" sx={{ mt: 2, mb: 2 }}>
+              <Typography variant="body2">
+                <strong>Important:</strong> Community names must exactly match the names in your uploaded start points file.
+                Only encounters for matching communities will be processed.
+              </Typography>
+            </Alert>
+            <Alert severity="info" sx={{ mt: 2, mb: 2 }}>
+              <Typography variant="body2">
+                <strong>Age Groups:</strong> Supported formats include "0-14", "15-64", "65+", "child", "adult", "senior", etc.
+                The system will automatically normalize these to standard formats.
+              </Typography>
+            </Alert>
+            <Alert severity="info" sx={{ mt: 2 }}>
+              <Typography variant="body2">
+                <strong>Cost Calculation:</strong> Costs will be multiplied by encounter counts for each community and age group
+                to provide realistic total cost estimates.
+              </Typography>
+            </Alert>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEncountersDialogOpen(false)}>Cancel</Button>
+          <Button onClick={processEncountersFile} variant="contained" color="primary">
             Process File
           </Button>
         </DialogActions>

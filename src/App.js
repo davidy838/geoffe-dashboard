@@ -3,6 +3,7 @@ import { Routes, Route } from "react-router-dom";
 import Topbar from "./scenes/global/Topbar";
 import Sidebar from "./scenes/global/Sidebar";
 import Dashboard from "./scenes/dashboard";
+import TitlePage from "./scenes/title-page";
 import ExcelFiles from "./scenes/team";
 import Invoices from "./scenes/invoices";
 import Bar from "./scenes/bar";
@@ -18,6 +19,7 @@ import { CssBaseline, ThemeProvider } from "@mui/material";
 import { ColorModeContext, useMode } from "./theme";
 import Calendar from "./scenes/calendar/calendar";
 import CustomMap from "./scenes/custom-map";
+
 function App() {
   const [theme, colorMode] = useMode();
   const [isSidebar, setIsSidebar] = useState(true);
@@ -31,7 +33,8 @@ function App() {
           <main className="content">
             <Topbar setIsSidebar={setIsSidebar} />
             <Routes>
-              <Route path="/" element={<Dashboard />} />
+              <Route path="/" element={<TitlePage />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/team" element={<ExcelFiles />} />
               <Route path="/invoices" element={<Invoices />} />
               <Route path="/form" element={<Form />} />

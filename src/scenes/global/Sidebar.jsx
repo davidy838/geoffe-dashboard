@@ -122,7 +122,7 @@ const Sidebar = () => {
 
           <Box paddingLeft={isCollapsed ? undefined : "10%"}>
             <Item
-              title="Dashboard"
+              title="Title Page"
               to="/"
               icon={<HomeOutlinedIcon />}
               selected={selected}
@@ -136,6 +136,13 @@ const Sidebar = () => {
             >
               Data
             </Typography>
+            <Item
+              title="Dashboard"
+              to="/dashboard"
+              icon={<BarChartOutlinedIcon />}
+              selected={selected}
+              setSelected={setSelected}
+            />
             <Item
               title="Excel Files"
               to="/team"
