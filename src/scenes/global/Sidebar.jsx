@@ -17,6 +17,9 @@ import TimelineOutlinedIcon from "@mui/icons-material/TimelineOutlined";
 import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
 import MapOutlinedIcon from "@mui/icons-material/MapOutlined";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
+import AttachMoneyIcon from "@mui/icons-material/AttachMoney";
+import AnalyticsIcon from "@mui/icons-material/Analytics";
+import MapIcon from "@mui/icons-material/Map";
 
 const Item = ({ title, to, icon, selected, setSelected }) => {
   const theme = useTheme();
@@ -141,20 +144,40 @@ const Sidebar = () => {
               setSelected={setSelected}
             />
             <Item
-              title="Contact Information"
-              to="/contacts"
-              icon={<ContactsOutlinedIcon />}
-              selected={selected}
-              setSelected={setSelected}
-            />
-            <Item
               title="Calculation Formulas"
               to="/invoices"
               icon={<ReceiptOutlinedIcon />}
               selected={selected}
               setSelected={setSelected}
             />
-
+            <Item
+              title="Cost Parameters"
+              to="/cost-params"
+              icon={<AttachMoneyIcon />}
+              selected={selected}
+              setSelected={setSelected}
+            />
+            <Item
+              title="Community Analysis"
+              to="/community-analysis"
+              icon={<AnalyticsIcon />}
+              selected={selected}
+              setSelected={setSelected}
+            />
+            <Item
+              title="Clinic Map"
+              to="/clinic-map"
+              icon={<MapIcon />}
+              selected={selected}
+              setSelected={setSelected}
+            />
+            <Item
+              title="Custom Map"
+              to="/custom-map"
+              icon={<MapIcon />}
+              selected={selected}
+              setSelected={setSelected}
+            />
             <Typography
               variant="h6"
               color={colors.grey[300]}

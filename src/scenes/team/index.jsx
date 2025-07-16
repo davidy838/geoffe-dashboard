@@ -103,12 +103,278 @@ const ExcelFiles = () => {
     }
   };
 
-  // Start analysis
+  // Update dashboard with analysis results
+  const updateDashboard = async (results) => {
+    try {
+      await fetch(`${API_BASE_URL}/dashboard/metrics/update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(results),
+      });
+    } catch (error) {
+      console.error('Error updating dashboard:', error);
+    }
+  };
+
+  // Function to parse CSV data (similar to community analysis)
+  const parseCSV = (csvText) => {
+    try {
+      console.log('Parsing CSV text length:', csvText.length);
+      
+      const lines = csvText.trim().split('\n');
+      console.log('Number of lines:', lines.length);
+      
+      if (lines.length < 2) {
+        throw new Error('CSV file must have at least a header row and one data row');
+      }
+      
+      // Parse headers - handle quoted headers
+      const headerLine = lines[0];
+      const headers = headerLine.split(',').map(header => header.trim().replace(/"/g, ''));
+      console.log('Parsed headers:', headers);
+      
+      const data = [];
+      
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue; // Skip empty lines
+        
+        // Split by comma, but handle quoted values
+        const values = [];
+        let current = '';
+        let inQuotes = false;
+        
+        for (let j = 0; j < line.length; j++) {
+          const char = line[j];
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            values.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        values.push(current.trim()); // Add the last value
+        
+        // Create row object
+        const row = {};
+        headers.forEach((header, index) => {
+          row[header] = values[index] || '';
+        });
+        data.push(row);
+      }
+      
+      console.log('Parsed data rows:', data.length);
+      console.log('Sample data row:', data[0]);
+      
+      return { headers, data };
+    } catch (error) {
+      console.error('Error parsing CSV:', error);
+      throw new Error(`Failed to parse CSV data: ${error.message}`);
+    }
+  };
+
+  // Function to transform CSV data into dashboard format (similar to community analysis)
+  const transformCSVDataForDashboard = (csvResults) => {
+    // Extract key metrics from the CSV data
+    const { headers, data } = csvResults;
+    
+    console.log('CSV Headers:', headers);
+    console.log('CSV Data (first 3 rows):', data.slice(0, 3));
+    
+    // Look for the specific column names that contain the total values
+    const totalSavingsColumn = headers.find(header => 
+      header === "Total Savings ($)" || 
+      header === "Total Savings" ||
+      header.toLowerCase().includes('total savings')
+    );
+    
+    const totalDistanceColumn = headers.find(header => 
+      header === "Total Distance Savings (km)" || 
+      header === "Total Distance Savings" ||
+      header.toLowerCase().includes('total distance savings')
+    );
+    
+    const totalDurationColumn = headers.find(header => 
+      header === "Total Duration Savings (hours)" || 
+      header === "Total Duration Savings" ||
+      header.toLowerCase().includes('total duration savings')
+    );
+    
+    const totalCO2Column = headers.find(header => 
+      header === "Total CO2 Savings (kg)" || 
+      header === "Total CO2 Savings" ||
+      header.toLowerCase().includes('total co2 savings')
+    );
+    
+    console.log('Found columns:');
+    console.log('- Total Savings column:', totalSavingsColumn);
+    console.log('- Total Distance column:', totalDistanceColumn);
+    console.log('- Total Duration column:', totalDurationColumn);
+    console.log('- Total CO2 column:', totalCO2Column);
+    
+    // Extract the single values from each column (assuming they're in the first data row)
+    let totalSavings = 0;
+    let totalDistanceSavings = 0;
+    let totalDurationSavings = 0;
+    let totalCO2Savings = 0;
+    
+    if (data.length > 0) {
+      const firstRow = data[0];
+      
+      if (totalSavingsColumn && firstRow[totalSavingsColumn]) {
+        totalSavings = parseFloat(firstRow[totalSavingsColumn]) || 0;
+        console.log(`Extracted total savings from ${totalSavingsColumn}:`, totalSavings);
+      }
+      
+      if (totalDistanceColumn && firstRow[totalDistanceColumn]) {
+        totalDistanceSavings = parseFloat(firstRow[totalDistanceColumn]) || 0;
+        console.log(`Extracted total distance from ${totalDistanceColumn}:`, totalDistanceSavings);
+      }
+      
+      if (totalDurationColumn && firstRow[totalDurationColumn]) {
+        totalDurationSavings = parseFloat(firstRow[totalDurationColumn]) || 0;
+        console.log(`Extracted total duration from ${totalDurationColumn}:`, totalDurationSavings);
+      }
+      
+      if (totalCO2Column && firstRow[totalCO2Column]) {
+        totalCO2Savings = parseFloat(firstRow[totalCO2Column]) || 0;
+        console.log(`Extracted total CO2 from ${totalCO2Column}:`, totalCO2Savings);
+      }
+    }
+    
+    // Create pathway data
+    const pathwayData = [
+      {
+        pathway: "CSV Analysis",
+        value: totalSavings
+      }
+    ];
+    
+    console.log('Final extracted values:');
+    console.log('- Total Savings:', totalSavings);
+    console.log('- Total Distance Savings:', totalDistanceSavings);
+    console.log('- Total Duration Savings:', totalDurationSavings);
+    console.log('- Total CO2 Savings:', totalCO2Savings);
+    
+    // Return data in the format expected by the dashboard
+    return {
+      analysisCompleted: true,
+      timestamp: new Date().toISOString(),
+      totalSavings: totalSavings,
+      totalDistanceSavings: totalDistanceSavings,
+      totalDurationSavings: totalDurationSavings,
+      totalCO2Savings: totalCO2Savings,
+      pathwayData: pathwayData,
+      rawData: csvResults, // Include raw data for debugging
+      summary: {
+        totalRecords: data.length,
+        totalColumns: headers.length,
+        foundColumns: {
+          totalSavings: totalSavingsColumn,
+          totalDistance: totalDistanceColumn,
+          totalDuration: totalDurationColumn,
+          totalCO2: totalCO2Column
+        }
+      }
+    };
+  };
+
+  // Enhanced analysis function that handles both Excel and CSV files
   const handleAnalyze = async (file) => {
     setAnalyzingFile(file);
     setShowAnalysisProgress(true);
     setAnalysisProgress(0);
     
+    try {
+      // Check if it's a CSV file
+      const isCSV = file.fileName.toLowerCase().endsWith('.csv');
+      
+      if (isCSV) {
+        // Handle CSV analysis directly
+        await handleCSVAnalysis(file);
+      } else {
+        // Handle Excel analysis via API
+        await handleExcelAnalysis(file);
+      }
+    } catch (error) {
+      console.error('Error during analysis:', error);
+      setSnackbar({ open: true, message: 'Analysis failed: ' + error.message, severity: 'error' });
+      setShowAnalysisProgress(false);
+      setAnalyzingFile(null);
+    }
+  };
+
+  // Handle CSV analysis
+  const handleCSVAnalysis = async (file) => {
+    try {
+      // Simulate analysis progress
+      const progressInterval = setInterval(() => {
+        setAnalysisProgress((prev) => {
+          if (prev >= 100) {
+            clearInterval(progressInterval);
+            return 100;
+          }
+          return prev + 10;
+        });
+      }, 200);
+
+      // Fetch the CSV file content
+      const response = await fetch(`${API_BASE_URL}/files/${file.id}/content`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch CSV content');
+      }
+
+      const csvData = await response.text();
+      console.log('Raw CSV response:', csvData.substring(0, 500) + '...');
+      
+      // Parse CSV data
+      const parsedData = parseCSV(csvData);
+      
+      // Transform data for dashboard
+      const dashboardData = transformCSVDataForDashboard(parsedData);
+      
+      console.log('Dashboard data to be sent:', dashboardData);
+      
+      // Update dashboard with analysis results
+      const updateResponse = await fetch(`${API_BASE_URL}/dashboard/metrics/update`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(dashboardData),
+      });
+
+      if (!updateResponse.ok) {
+        throw new Error('Failed to update dashboard');
+      }
+
+      // Trigger dashboard update event for real-time refresh
+      window.dispatchEvent(new CustomEvent('dashboard-update', {
+        detail: {
+          type: 'dashboard-update',
+          data: dashboardData
+        }
+      }));
+
+      setShowAnalysisProgress(false);
+      setAnalyzingFile(null);
+      setSnackbar({ open: true, message: 'CSV analysis completed successfully!', severity: 'success' });
+
+    } catch (error) {
+      console.error('Error during CSV analysis:', error);
+      setShowAnalysisProgress(false);
+      setAnalyzingFile(null);
+      setSnackbar({ open: true, message: 'CSV analysis failed: ' + error.message, severity: 'error' });
+    }
+  };
+
+  // Handle Excel analysis (existing functionality)
+  const handleExcelAnalysis = async (file) => {
     try {
       const response = await fetch(`${API_BASE_URL}/files/${file.id}/analyze`, {
         method: 'POST'
@@ -123,8 +389,8 @@ const ExcelFiles = () => {
       // Start polling for progress
       pollAnalysisProgress(data.analysisId);
     } catch (error) {
-      console.error('Error starting analysis:', error);
-      setSnackbar({ open: true, message: 'Failed to start analysis', severity: 'error' });
+      console.error('Error starting Excel analysis:', error);
+      setSnackbar({ open: true, message: 'Failed to start Excel analysis', severity: 'error' });
       setShowAnalysisProgress(false);
       setAnalyzingFile(null);
     }
@@ -165,21 +431,6 @@ const ExcelFiles = () => {
         setSnackbar({ open: true, message: 'Analysis failed', severity: 'error' });
       }
     }, 1000); // Poll every second
-  };
-
-  // Update dashboard with analysis results
-  const updateDashboard = async (results) => {
-    try {
-      await fetch(`${API_BASE_URL}/dashboard/metrics/update`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(results),
-      });
-    } catch (error) {
-      console.error('Error updating dashboard:', error);
-    }
   };
 
   // Load files on component mount

@@ -1,0 +1,167 @@
+community_name,Encounters 0-14,Encounters 15-64,Encounters 65+
+100 Mile House,87,223,126
+Agassiz/Harrison,86,140,85
+Alberni Valley/Bamfield,0,2,2
+Aldergrove/Otter,197,296,89
+Armstrong/Spallumcheen,93,165,64
+Arrow Lakes,13,61,35
+Bella Coola Valley,4,19,8
+Bowen Island/Lions Bay,46,69,49
+Brookswood/Murrayville,1,0,0
+Burnaby Heights/Capital Hill,6,14,14
+Burnaby Mountain/Lougheed,0,0,1
+Burns Lake North,4,4,1
+Burns Lake South,1,3,1
+Burns Lake Town Centre,38,113,21
+Campbell River,322,681,296
+Campbell River Rural,32,94,52
+Castlegar,93,228,79
+Cedar/Wellington,1,2,1
+Central Coast,7,14,2
+Central Cowichan,372,791,327
+Central Okanagan Rural West,35,74,58
+Central Saanich,195,357,221
+Chemainus,35,73,55
+Chetwynd,38,82,10
+City of Langley,1648,2399,731
+Cloverdale,1,0,0
+Colwood,1,2,1
+Comox,128,285,146
+Comox Valley Rural,161,263,115
+Courtenay,352,673,313
+Cowichan Valley West,53,119,56
+Cranbrook,181,444,122
+Creston,72,158,114
+Dawson Creek,150,266,57
+Downtown Kelowna,1152,2682,972
+Downtown Nanaimo,1155,2575,1003
+Downtown Vancouver,3,8,3
+Downtown Victoria/Vic West,3816,9627,3517
+East Newton,2,0,0
+Enderby,66,133,71
+Esquimalt,5,20,7
+Fernie,149,229,60
+Fort Nelson Population Centre,27,56,12
+Fort St John,320,530,69
+Fort St. James North,27,70,8
+Fraser Lake,13,49,9
+Gabriola Island,31,114,135
+Garden Village/Cascade/Douglas/Gilpin,2282,3936,878
+Gibsons,72,242,103
+Golden,55,120,39
+Grand Forks,45,153,85
+Grandview-Woodland,0,1,0
+Haida Gwaii North,17,40,10
+Haida Gwaii South,12,33,10
+Haney,997,1575,400
+Hope,46,128,43
+Houston,28,106,17
+Hudson's Hope,11,18,6
+Juan de Fuca Coast,23,44,20
+Kamloops Centre North,7,29,5
+Kamloops Centre South,1208,2766,898
+Keremeos,20,93,45
+Kettle Valley,18,41,49
+Killarney,0,1,0
+Kimberley,69,134,61
+Kitimat,49,143,35
+Kootenay Lake,25,68,44
+Ladner,980,1672,581
+Ladysmith,113,233,114
+Lake Country,161,256,94
+Langford South,31,69,15
+Lillooet,22,69,31
+Lower Thompson,145,357,177
+Mackenzie,14,44,9
+Maple Ridge Rural,3,0,1
+McBride,7,12,6
+Merritt,56,201,82
+Mount Pleasant,5719,12882,2457
+Nanaimo North/Lantzville,45,74,25
+Nelson,223,586,222
+New Westminster - Central,879,1656,415
+New Westminster - East,0,0,1
+Nisga'a,1,11,3
+North Chilliwack,989,1588,504
+North Delta,0,1,1
+North Langley Township,0,0,1
+North Mission,471,821,192
+North Okanagan/Lumby,58,94,38
+North Saanich,113,243,166
+North Thompson,21,44,23
+North Vancouver City - West,1549,2530,763
+Northern Boreal,1,3,0
+Oceanside Rural,59,184,133
+Parksville,112,240,232
+Peace River North Rural,90,163,33
+Peace River South Rural,31,49,21
+Pemberton,72,134,15
+Pender/Galiano/Saturna/Mayne,29,73,78
+Penelakut and Thetis Islands,5,18,11
+Penticton,314,711,363
+Pitt Meadows,223,299,87
+Port Alberni,193,413,165
+Port Coquitlam,685,1090,217
+Port Hardy/Port Alice,54,106,40
+Port McNeill/Sointula,32,63,30
+Port Moody North/Anmore/Belcarra,462,616,163
+Port Moody South,1,1,0
+Powell River City,79,206,111
+Prince George City - Central,680,1202,264
+Prince George North Fraser Rural,6,12,3
+Prince George Southwest Rural,5,6,4
+Prince Rupert City Centre,71,224,50
+Prince Rupert Rural,11,16,2
+Princeton,21,46,27
+Quadra/Swan Lake,0,1,2
+Qualicum Beach,76,215,182
+Quesnel City Centre,118,280,88
+Quesnel Rural,1,7,5
+Renfrew-Collingwood,0,1,0
+Revelstoke,63,106,29
+Richmond City Centre,1325,2104,615
+Salmon Arm,212,504,251
+Salt Spring Island,127,247,169
+Sechelt,65,171,86
+Sidney,108,222,263
+Smithers Rural,23,56,19
+Smithers Town Centre,75,177,48
+Sooke,242,459,158
+South Cariboo,42,95,64
+South Chilliwack,29,45,20
+South Cowichan,156,314,167
+South Surrey East,2,0,0
+Southern Okanagan,87,252,186
+Southwest Coquitlam,1383,2284,548
+Squamish,314,405,47
+Stikine,1,3,1
+Summerland,102,217,146
+Sunshine Coast Rural,64,167,91
+Terrace City Centre,164,356,75
+Terrace Rural,25,93,18
+Thompson/Seafair,0,1,1
+Trail,154,346,126
+Tsawwassen,40,38,12
+Tumbler Ridge,31,49,12
+University of British Columbia,4,1,0
+Upper Skeena,23,103,30
+Valemount,9,21,9
+Vancouver Island North Remote,15,27,16
+Vancouver Island West,4,13,4
+Vanderhoof,38,78,15
+Vernon Centre/Coldstream,508,1118,529
+View Royal,1,1,0
+Walnut Grove/Fort Langley,3,2,0
+West Abbotsford,1307,2299,642
+West Cariboo,13,32,8
+West Coast,65,188,32
+West Kelowna,334,611,268
+West Vancouver - Lower,235,521,295
+West Vancouver - Upper,1,0,0
+Whalley,5121,8655,1874
+Whistler,65,155,17
+White Rock,137,316,228
+Williams Lake/East Cariboo,207,472,186
+Willoughby,8,7,2
+Windermere,69,129,46
+qathet Rural,7,22,20

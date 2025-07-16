@@ -27,9 +27,12 @@ const Dashboard = () => {
     totalDurationSavings: 0,
     totalCO2Savings: 0,
     lastUpdated: null,
-    sourceFile: null
+    sourceFile: null,
+    pathwayData: [],
+    analysisResults: null
   });
   const [loading, setLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
 
   // Fetch dashboard data
   const fetchDashboardData = async () => {
@@ -40,7 +43,14 @@ const Dashboard = () => {
         throw new Error('Failed to fetch dashboard data');
       }
       const data = await response.json();
-      setDashboardData(data);
+      
+      // Transform the data if it comes from community analysis
+      if (data.analysisCompleted && data.rawData) {
+        const transformedData = transformAnalysisData(data);
+        setDashboardData(transformedData);
+      } else {
+        setDashboardData(data);
+      }
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
       // Use default values if API fails
@@ -50,12 +60,66 @@ const Dashboard = () => {
         totalDurationSavings: 32441,
         totalCO2Savings: 1325134,
         lastUpdated: null,
-        sourceFile: null
+        sourceFile: null,
+        pathwayData: [],
+        analysisResults: null
       });
     } finally {
       setLoading(false);
     }
   };
+
+  // Transform analysis data for dashboard display
+  const transformAnalysisData = (analysisData) => {
+    const { rawData, totalSavings, pathwayData, summary } = analysisData;
+    
+    // Extract key metrics from the CSV data
+    let distanceSavings = 0;
+    let durationSavings = 0;
+    let co2Savings = 0;
+    
+    if (rawData && rawData.data) {
+      rawData.data.forEach(row => {
+        // Look for distance-related columns
+        Object.keys(row).forEach(key => {
+          const lowerKey = key.toLowerCase();
+          if (lowerKey.includes('distance') || lowerKey.includes('km')) {
+            distanceSavings += parseFloat(row[key]) || 0;
+          }
+          if (lowerKey.includes('duration') || lowerKey.includes('time') || lowerKey.includes('hours')) {
+            durationSavings += parseFloat(row[key]) || 0;
+          }
+          if (lowerKey.includes('co2') || lowerKey.includes('carbon') || lowerKey.includes('emission')) {
+            co2Savings += parseFloat(row[key]) || 0;
+          }
+        });
+      });
+    }
+    
+    return {
+      totalSavings: totalSavings || 0,
+      totalDistanceSavings: distanceSavings,
+      totalDurationSavings: durationSavings,
+      totalCO2Savings: co2Savings,
+      lastUpdated: analysisData.timestamp,
+      sourceFile: `Community Analysis - ${analysisData.timestamp ? new Date(analysisData.timestamp).toLocaleDateString() : 'Recent'}`,
+      pathwayData: pathwayData || [],
+      analysisResults: analysisData,
+      summary: summary
+    };
+  };
+
+  // Listen for dashboard updates from other components
+  useEffect(() => {
+    const handleDashboardUpdate = (event) => {
+      if (event.detail && event.detail.type === 'dashboard-update') {
+        fetchDashboardData();
+      }
+    };
+
+    window.addEventListener('dashboard-update', handleDashboardUpdate);
+    return () => window.removeEventListener('dashboard-update', handleDashboardUpdate);
+  }, []);
 
   // Load dashboard data on mount
   useEffect(() => {
@@ -68,6 +132,50 @@ const Dashboard = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Download reports function
+  const handleDownloadReports = async () => {
+    setDownloading(true);
+    try {
+      // First, try to fetch the file to ensure it exists
+      const response = await fetch('/data/Reports/Copy of GEOFFE API Report-14.pdf');
+      
+      if (!response.ok) {
+        throw new Error('Report file not found');
+      }
+
+      // Get the file as a blob
+      const blob = await response.blob();
+      
+      // Create a download link
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'GEOFFE API Report-14.pdf';
+      
+      // Trigger download
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Clean up the URL object
+      window.URL.revokeObjectURL(url);
+      
+      console.log('Download completed successfully');
+    } catch (error) {
+      console.error('Error downloading report:', error);
+      
+      // Fallback: try to open in new tab
+      try {
+        window.open('/data/Reports/Copy of GEOFFE API Report-14.pdf', '_blank');
+      } catch (fallbackError) {
+        console.error('Fallback download also failed:', fallbackError);
+        alert('Unable to download the report. Please try again later.');
+      }
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
     <Box m="20px">
       {/* HEADER */}
@@ -76,16 +184,25 @@ const Dashboard = () => {
 
         <Box>
           <Button
+            onClick={handleDownloadReports}
+            disabled={downloading}
             sx={{
               backgroundColor: colors.blueAccent[700],
               color: colors.grey[100],
               fontSize: "14px",
               fontWeight: "bold",
               padding: "10px 20px",
+              '&:hover': {
+                backgroundColor: colors.blueAccent[600],
+              },
+              '&:disabled': {
+                backgroundColor: colors.grey[600],
+                color: colors.grey[400],
+              }
             }}
           >
             <DownloadOutlinedIcon sx={{ mr: "10px" }} />
-            Download Reports
+            {downloading ? "Downloading..." : "Download Reports"}
           </Button>
         </Box>
       </Box>
