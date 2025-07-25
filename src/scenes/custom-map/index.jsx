@@ -29,7 +29,10 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
-  LinearProgress
+  LinearProgress,
+  FormGroup,
+  FormControlLabel,
+  Checkbox
 } from "@mui/material";
 import { tokens } from "../../theme";
 import Header from "../../components/Header";
@@ -48,6 +51,7 @@ import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 import DownloadIcon from '@mui/icons-material/Download';
 import DescriptionIcon from '@mui/icons-material/Description';
 import FunctionsIcon from '@mui/icons-material/Functions';
+import FilterListIcon from '@mui/icons-material/FilterList';
 
 // React Leaflet imports
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
@@ -573,6 +577,12 @@ const CustomMap = () => {
     parking: 3,
     duration: 0.25
   });
+
+  // Age group selection state
+  const [selectedAgeGroups, setSelectedAgeGroups] = useState(['0-14', '15-64', '65+']);
+
+  // Vehicle type selection state
+  const [selectedVehicleType, setSelectedVehicleType] = useState('car');
 
   // Clinic form state
   const [clinicForm, setClinicForm] = useState({
@@ -1415,6 +1425,24 @@ const CustomMap = () => {
       return;
     }
 
+    if (selectedAgeGroups.length === 0) {
+      setSnackbar({ 
+        open: true, 
+        message: 'Please select at least one age group to analyze', 
+        severity: 'warning' 
+      });
+      return;
+    }
+
+    if (!selectedVehicleType) {
+      setSnackbar({ 
+        open: true, 
+        message: 'Please select a vehicle type', 
+        severity: 'warning' 
+      });
+      return;
+    }
+
     const calculator = new PFCCalculator();
     
     // Calculate costs for each start point's closest lab
@@ -1429,132 +1457,212 @@ const CustomMap = () => {
       // Determine health authority (simplified - would need actual HA boundaries)
       const ha_name = calculator.getHealthAuthority(analysis.startPoint.latitude, analysis.startPoint.longitude);
       
-      return {
+      const costData = {
         startPoint: analysis.startPoint,
         closestLab: route.to,
         route: route,
         healthAuthority: ha_name,
-        child: calculator.calculateMDAppointment({
+      };
+      
+      // Only add age groups that are selected
+      if (selectedAgeGroups.includes('0-14')) {
+        costData.child = calculator.calculateMDAppointment({
           distance: distanceKm,
           duration: costParams.duration,
           age: 10,
           ha_name: ha_name,
-          service_type: 'MD'
-        }),
-        adult: calculator.calculateMDAppointment({
+          service_type: 'MD',
+          vehicle_type: selectedVehicleType
+        });
+      }
+      
+      if (selectedAgeGroups.includes('15-64')) {
+        costData.adult = calculator.calculateMDAppointment({
           distance: distanceKm,
           duration: costParams.duration,
           age: 40,
           ha_name: ha_name,
-          service_type: 'MD'
-        }),
-        senior: calculator.calculateMDAppointment({
+          service_type: 'MD',
+          vehicle_type: selectedVehicleType
+        });
+      }
+      
+      if (selectedAgeGroups.includes('65+')) {
+        costData.senior = calculator.calculateMDAppointment({
           distance: distanceKm,
           duration: costParams.duration,
           age: 70,
           ha_name: ha_name,
-          service_type: 'MD'
-        })
-      };
+          service_type: 'MD',
+          vehicle_type: selectedVehicleType
+        });
+      }
+      
+      return costData;
     }).filter(cost => cost !== null);
+    
+    console.log('Filtered start point costs:', startPointCosts);
 
     // Apply encounter multipliers if encounters data is available
     let encounterMultipliers = {};
     if (uploadedEncounters.length > 0) {
       // Create a lookup table for encounter counts by community and age group
       uploadedEncounters.forEach(enc => {
-        const key = `${enc.community}-${enc.ageGroup}`;
-        encounterMultipliers[key] = enc.encounters;
+        if (selectedAgeGroups.includes(enc.ageGroup)) {
+          const key = `${enc.community}-${enc.ageGroup}`;
+          encounterMultipliers[key] = enc.encounters;
+        }
       });
     }
 
-    // Calculate totals for each age group with encounter multipliers
-    const childTotal = startPointCosts.reduce((sum, cost) => {
-      const multiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
-      return sum + (cost.child.costs.total * multiplier);
-    }, 0);
+    // Calculate totals only for selected age groups
+    const totals = {};
     
-    const adultTotal = startPointCosts.reduce((sum, cost) => {
-      const multiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
-      return sum + (cost.adult.costs.total * multiplier);
-    }, 0);
+    if (selectedAgeGroups.includes('0-14')) {
+      totals.child = startPointCosts.reduce((sum, cost) => {
+        const multiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
+        return sum + (cost.child.costs.total * multiplier);
+      }, 0);
+    }
     
-    const seniorTotal = startPointCosts.reduce((sum, cost) => {
-      const multiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
-      return sum + (cost.senior.costs.total * multiplier);
-    }, 0);
+    if (selectedAgeGroups.includes('15-64')) {
+      totals.adult = startPointCosts.reduce((sum, cost) => {
+        const multiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
+        return sum + (cost.adult.costs.total * multiplier);
+      }, 0);
+    }
     
-    const grandTotal = childTotal + adultTotal + seniorTotal;
+    if (selectedAgeGroups.includes('65+')) {
+      totals.senior = startPointCosts.reduce((sum, cost) => {
+        const multiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
+        return sum + (cost.senior.costs.total * multiplier);
+      }, 0);
+    }
+    
+    const grandTotal = Object.values(totals).reduce((sum, total) => sum + total, 0);
 
-    // Calculate subunit totals with encounter multipliers
+    // Calculate subunit totals with encounter multipliers only for selected age groups
     const totalLostProductivity = startPointCosts.reduce((sum, cost) => {
-      const multiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
-      return sum + (cost.adult.costs.lostProductivity * multiplier);
+      if (selectedAgeGroups.includes('15-64') && cost.adult) {
+        const multiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
+        return sum + (cost.adult.costs.lostProductivity * multiplier);
+      }
+      return sum;
     }, 0);
     
     const totalInformalCaregiving = startPointCosts.reduce((sum, cost) => {
-      const childMultiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
-      const adultMultiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
-      const seniorMultiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
+      let total = 0;
       
-      return sum + 
-        (cost.child.costs.informalCaregiving * childMultiplier) + 
-        (cost.adult.costs.informalCaregiving * adultMultiplier) + 
-        (cost.senior.costs.informalCaregiving * seniorMultiplier);
+      if (selectedAgeGroups.includes('0-14') && cost.child) {
+        const childMultiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
+        total += cost.child.costs.informalCaregiving * childMultiplier;
+      }
+      
+      if (selectedAgeGroups.includes('15-64') && cost.adult) {
+        const adultMultiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
+        total += cost.adult.costs.informalCaregiving * adultMultiplier;
+      }
+      
+      if (selectedAgeGroups.includes('65+') && cost.senior) {
+        const seniorMultiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
+        total += cost.senior.costs.informalCaregiving * seniorMultiplier;
+      }
+      
+      return sum + total;
     }, 0);
     
     const totalOutOfPocket = startPointCosts.reduce((sum, cost) => {
-      const childMultiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
-      const adultMultiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
-      const seniorMultiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
+      let total = 0;
       
-      return sum + 
-        (cost.child.costs.outOfPocket * childMultiplier) + 
-        (cost.adult.costs.outOfPocket * adultMultiplier) + 
-        (cost.senior.costs.outOfPocket * seniorMultiplier);
+      if (selectedAgeGroups.includes('0-14') && cost.child) {
+        const childMultiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
+        total += cost.child.costs.outOfPocket * childMultiplier;
+      }
+      
+      if (selectedAgeGroups.includes('15-64') && cost.adult) {
+        const adultMultiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
+        total += cost.adult.costs.outOfPocket * adultMultiplier;
+      }
+      
+      if (selectedAgeGroups.includes('65+') && cost.senior) {
+        const seniorMultiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
+        total += cost.senior.costs.outOfPocket * seniorMultiplier;
+      }
+      
+      return sum + total;
     }, 0);
 
     // Calculate CO2 emissions totals with encounter multipliers
     const totalCO2 = startPointCosts.reduce((sum, cost) => {
-      const childMultiplier = encounterMultipliers[`${cost.startPoint.name}-0-14`] || 1;
-      const adultMultiplier = encounterMultipliers[`${cost.startPoint.name}-15-64`] || 1;
-      const seniorMultiplier = encounterMultipliers[`${cost.startPoint.name}-65+`] || 1;
+      // Calculate total encounters for selected age groups only
+      let totalEncounters = 0;
+      
+      if (selectedAgeGroups.includes('0-14')) {
+        totalEncounters += encounterMultipliers[`${cost.startPoint.name}-0-14`] || 0;
+      }
+      
+      if (selectedAgeGroups.includes('15-64')) {
+        totalEncounters += encounterMultipliers[`${cost.startPoint.name}-15-64`] || 0;
+      }
+      
+      if (selectedAgeGroups.includes('65+')) {
+        totalEncounters += encounterMultipliers[`${cost.startPoint.name}-65+`] || 0;
+      }
       
       // Use child emissions as base, but multiply by total encounters for this community
-      const totalEncounters = (encounterMultipliers[`${cost.startPoint.name}-0-14`] || 0) +
-                             (encounterMultipliers[`${cost.startPoint.name}-15-64`] || 0) +
-                             (encounterMultipliers[`${cost.startPoint.name}-65+`] || 0);
+      let emissionsPerTrip = 0;
+      if (selectedAgeGroups.includes('0-14') && cost.child) {
+        emissionsPerTrip = cost.child.emissions.co2RoundTrip;
+      } else if (selectedAgeGroups.includes('15-64') && cost.adult) {
+        emissionsPerTrip = cost.adult.emissions.co2RoundTrip;
+      } else if (selectedAgeGroups.includes('65+') && cost.senior) {
+        emissionsPerTrip = cost.senior.emissions.co2RoundTrip;
+      } else {
+        // Fallback: calculate a default emission
+        const defaultCost = calculator.calculateMDAppointment({
+          distance: cost.route.realDistance / 1000,
+          duration: costParams.duration,
+          age: 40,
+          ha_name: cost.healthAuthority,
+          service_type: 'MD',
+          vehicle_type: selectedVehicleType
+        });
+        emissionsPerTrip = defaultCost.emissions.co2RoundTrip;
+      }
       
-      return sum + (cost.child.emissions.co2RoundTrip * Math.max(totalEncounters, 1));
+      return sum + (emissionsPerTrip * Math.max(totalEncounters, 1));
     }, 0);
 
     const results = {
       startPointCosts, // Individual start point costs
-      child: startPointCosts[0]?.child || calculator.calculateMDAppointment({
+      child: selectedAgeGroups.includes('0-14') ? (startPointCosts[0]?.child || calculator.calculateMDAppointment({
         distance: 35,
         duration: costParams.duration,
         age: 10,
         ha_name: 'Vancouver Coastal',
-        service_type: 'MD'
-      }),
-      adult: startPointCosts[0]?.adult || calculator.calculateMDAppointment({
+        service_type: 'MD',
+        vehicle_type: selectedVehicleType
+      })) : null,
+      adult: selectedAgeGroups.includes('15-64') ? (startPointCosts[0]?.adult || calculator.calculateMDAppointment({
         distance: 35,
         duration: costParams.duration,
         age: 40,
         ha_name: 'Vancouver Coastal',
-        service_type: 'MD'
-      }),
-      senior: startPointCosts[0]?.senior || calculator.calculateMDAppointment({
+        service_type: 'MD',
+        vehicle_type: selectedVehicleType
+      })) : null,
+      senior: selectedAgeGroups.includes('65+') ? (startPointCosts[0]?.senior || calculator.calculateMDAppointment({
         distance: 35,
         duration: costParams.duration,
         age: 70,
         ha_name: 'Vancouver Coastal',
-        service_type: 'MD'
-      }),
+        service_type: 'MD',
+        vehicle_type: selectedVehicleType
+      })) : null,
       totals: {
-        child: childTotal,
-        adult: adultTotal,
-        senior: seniorTotal,
+        child: selectedAgeGroups.includes('0-14') ? (totals.child || 0) : 0,
+        adult: selectedAgeGroups.includes('15-64') ? (totals.adult || 0) : 0,
+        senior: selectedAgeGroups.includes('65+') ? (totals.senior || 0) : 0,
         grand: grandTotal,
         lostProductivity: totalLostProductivity,
         informalCaregiving: totalInformalCaregiving,
@@ -1571,11 +1679,13 @@ const CustomMap = () => {
         healthAuthorities: [...new Set(startPointCosts.map(cost => cost.healthAuthority))]
       },
       encounters: {
-        data: uploadedEncounters,
-        hasData: uploadedEncounters.length > 0,
-        totalEncounters: uploadedEncounters.reduce((sum, enc) => sum + enc.encounters, 0),
-        communitiesWithEncounters: [...new Set(uploadedEncounters.map(enc => enc.community))].length
-      }
+        data: uploadedEncounters.filter(enc => selectedAgeGroups.includes(enc.ageGroup)),
+        hasData: uploadedEncounters.filter(enc => selectedAgeGroups.includes(enc.ageGroup)).length > 0,
+        totalEncounters: uploadedEncounters.filter(enc => selectedAgeGroups.includes(enc.ageGroup)).reduce((sum, enc) => sum + enc.encounters, 0),
+        communitiesWithEncounters: [...new Set(uploadedEncounters.filter(enc => selectedAgeGroups.includes(enc.ageGroup)).map(enc => enc.community))].length
+      },
+      selectedAgeGroups: selectedAgeGroups,
+      selectedVehicleType: selectedVehicleType
     };
 
     setCostResults(results);
@@ -1591,7 +1701,7 @@ const CustomMap = () => {
     }
 
     try {
-      // Create CSV headers
+      // Create CSV headers based on selected age groups
       const headers = [
         'Start Point Name',
         'Start Point Address',
@@ -1599,6 +1709,9 @@ const CustomMap = () => {
         'Closest Lab Name',
         'Closest Lab Address',
         'Health Authority',
+        'Vehicle Type',
+        'Vehicle Cost Factor',
+        'Vehicle CO2 Factor',
         'Haversine Distance (km)',
         'Real Distance (km)',
         'Real Duration (min)',
@@ -1607,150 +1720,175 @@ const CustomMap = () => {
         'Appointment Time (hrs)',
         'Total Duration (hrs)',
         'CO2 Emissions (kg)',
-        'Child (0-14) - Encounters',
-        'Child (0-14) - Lost Productivity',
-        'Child (0-14) - Informal Caregiving',
-        'Child (0-14) - Out of Pocket',
-        'Child (0-14) - Cost Per Encounter',
-        'Child (0-14) - Total Cost',
-        'Adult (15-64) - Encounters',
-        'Adult (15-64) - Lost Productivity',
-        'Adult (15-64) - Informal Caregiving',
-        'Adult (15-64) - Out of Pocket',
-        'Adult (15-64) - Cost Per Encounter',
-        'Adult (15-64) - Total Cost',
-        'Senior (65+) - Encounters',
-        'Senior (65+) - Lost Productivity',
-        'Senior (65+) - Informal Caregiving',
-        'Senior (65+) - Out of Pocket',
-        'Senior (65+) - Cost Per Encounter',
-        'Senior (65+) - Total Cost',
-        'Grand Total (All Ages)',
-        'Caregiver Coefficient (Child)',
-        'Caregiver Coefficient (Adult)',
-        'Caregiver Coefficient (Senior)',
-        'Parking Cost',
-        'Wage Rate ($/hr)',
-        'Car Cost ($/km)',
-        'Meal Cost',
-        'Accommodation Cost',
-        'Data Usage Cost'
       ];
+      
+      // Add age group specific headers only for selected groups
+      costResults.selectedAgeGroups.forEach(ageGroup => {
+        const label = ageGroup === '0-14' ? 'Child' : ageGroup === '15-64' ? 'Adult' : 'Senior';
+        headers.push(`${label} (${ageGroup}) - Encounters`);
+        headers.push(`${label} (${ageGroup}) - Lost Productivity`);
+        headers.push(`${label} (${ageGroup}) - Informal Caregiving`);
+        headers.push(`${label} (${ageGroup}) - Out of Pocket`);
+        headers.push(`${label} (${ageGroup}) - Cost Per Encounter`);
+        headers.push(`${label} (${ageGroup}) - Total Cost`);
+      });
+      
+      headers.push('Grand Total (All Ages)');
+      headers.push('Caregiver Coefficient (Child)');
+      headers.push('Caregiver Coefficient (Adult)');
+      headers.push('Caregiver Coefficient (Senior)');
+      headers.push('Parking Cost');
+      headers.push('Wage Rate ($/hr)');
+      headers.push('Car Cost ($/km)');
+      headers.push('Meal Cost');
+      headers.push('Accommodation Cost');
+      headers.push('Data Usage Cost');
 
       // Create CSV rows
       const rows = costResults.startPointCosts.map(cost => {
-        const { startPoint, closestLab, route, healthAuthority, child, adult, senior } = cost;
+        const { startPoint, closestLab, route, healthAuthority } = cost;
         
-        // Get encounter counts for this community
-        const childEncounters = costResults.encounters.data.find(enc => 
-          enc.community === startPoint.name && enc.ageGroup === '0-14'
-        )?.encounters || 1;
+        // Get a reference cost for base data (use first available age group)
+        const referenceCost = cost.child || cost.adult || cost.senior;
         
-        const adultEncounters = costResults.encounters.data.find(enc => 
-          enc.community === startPoint.name && enc.ageGroup === '15-64'
-        )?.encounters || 1;
-        
-        const seniorEncounters = costResults.encounters.data.find(enc => 
-          enc.community === startPoint.name && enc.ageGroup === '65+'
-        )?.encounters || 1;
-        
-        // Calculate total costs with encounters
-        const childTotalCost = child.costs.total * childEncounters;
-        const adultTotalCost = adult.costs.total * adultEncounters;
-        const seniorTotalCost = senior.costs.total * seniorEncounters;
-        const grandTotal = childTotalCost + adultTotalCost + seniorTotalCost;
-        
-        return [
+        // Base row data
+        const row = [
           startPoint.name,
           startPoint.address,
           `${startPoint.latitude.toFixed(6)}, ${startPoint.longitude.toFixed(6)}`,
           closestLab.name,
           closestLab.address,
           healthAuthority,
+          referenceCost?.vehicleType || selectedVehicleType,
+          referenceCost?.parameters.vehicleCostFactor || 1.0,
+          referenceCost?.emissions.co2Factor || 1.0,
           route.haversineDistance.toFixed(2),
           (route.realDistance / 1000).toFixed(2),
           Math.round(route.realDuration / 60),
-          child.distance.roundTrip.toFixed(2),
-          child.duration.travel.toFixed(2),
-          child.duration.appointment.toFixed(2),
-          child.duration.total.toFixed(2),
-          child.emissions.co2RoundTrip.toFixed(2),
-          childEncounters,
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.costs.lostProductivity),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.costs.informalCaregiving),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.costs.outOfPocket),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.costs.total),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(childTotalCost),
-          adultEncounters,
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.costs.lostProductivity),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.costs.informalCaregiving),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.costs.outOfPocket),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adult.costs.total),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(adultTotalCost),
-          seniorEncounters,
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.costs.lostProductivity),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.costs.informalCaregiving),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.costs.outOfPocket),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(senior.costs.total),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(seniorTotalCost),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(grandTotal),
-          child.parameters.caregiverCoeff.toFixed(2),
-          adult.parameters.caregiverCoeff.toFixed(2),
-          senior.parameters.caregiverCoeff.toFixed(2),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.parkingCost),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.wage),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.carCost),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.mealCost),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.accommodation),
-          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(child.parameters.dataUsage)
+          referenceCost?.distance.roundTrip.toFixed(2) || '0.00',
+          referenceCost?.duration.travel.toFixed(2) || '0.00',
+          referenceCost?.duration.appointment.toFixed(2) || '0.00',
+          referenceCost?.duration.total.toFixed(2) || '0.00',
+          referenceCost?.emissions.co2RoundTrip.toFixed(2) || '0.00',
         ];
+        
+        let grandTotal = 0;
+        
+        // Add age group specific data only for selected groups
+        costResults.selectedAgeGroups.forEach(ageGroup => {
+          const ageData = ageGroup === '0-14' ? cost.child : ageGroup === '15-64' ? cost.adult : cost.senior;
+          
+          if (ageData) {
+            const encounters = costResults.encounters.data.find(enc => 
+              enc.community === startPoint.name && enc.ageGroup === ageGroup
+            )?.encounters || 1;
+            
+            const totalCost = ageData.costs.total * encounters;
+            grandTotal += totalCost;
+            
+            row.push(
+              encounters,
+              new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(ageData.costs.lostProductivity),
+              new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(ageData.costs.informalCaregiving),
+              new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(ageData.costs.outOfPocket),
+              new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(ageData.costs.total),
+              new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(totalCost)
+            );
+          } else {
+            // Add empty values for non-selected age groups
+            row.push('', '', '', '', '', '');
+          }
+        });
+        
+        // Add grand total and other data
+        row.push(
+          new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(grandTotal),
+          cost.child?.caregiverCoeff || '',
+          cost.adult?.caregiverCoeff || '',
+          cost.senior?.caregiverCoeff || '',
+          referenceCost?.costs.parking || '',
+          costParams.wage,
+          referenceCost?.costs.car || '',
+          referenceCost?.costs.meal || '',
+          referenceCost?.costs.accommodation || '',
+          referenceCost?.costs.dataUsage || ''
+        );
+        
+        return row;
       });
 
-      // Add summary row
-      rows.push([
+      // Add summary row with only selected age groups
+      const summaryRow = [
         'TOTAL FOR ALL START POINTS',
         '',
         '',
         '',
         '',
         costResults.summary.healthAuthorities.join(', '),
+        selectedVehicleType,
+        costResults.child?.parameters?.vehicleCostFactor || costResults.adult?.parameters?.vehicleCostFactor || costResults.senior?.parameters?.vehicleCostFactor || 1.0,
+        costResults.child?.emissions?.co2Factor || costResults.adult?.emissions?.co2Factor || costResults.senior?.emissions?.co2Factor || 1.0,
         costResults.startPointCosts.reduce((sum, cost) => sum + cost.route.haversineDistance, 0).toFixed(2),
         costResults.summary.totalDistance.toFixed(2),
         Math.round(costResults.startPointCosts.reduce((sum, cost) => sum + cost.route.realDuration, 0) / 60),
-        costResults.startPointCosts.reduce((sum, cost) => sum + cost.child.distance.roundTrip, 0).toFixed(2),
-        costResults.startPointCosts.reduce((sum, cost) => sum + cost.child.duration.travel, 0).toFixed(2),
-        costResults.startPointCosts.reduce((sum, cost) => sum + cost.child.duration.appointment, 0).toFixed(2),
-        costResults.startPointCosts.reduce((sum, cost) => sum + cost.child.duration.total, 0).toFixed(2),
+        costResults.startPointCosts.reduce((sum, cost) => {
+          const refCost = cost.child || cost.adult || cost.senior;
+          return sum + (refCost?.distance.roundTrip || 0);
+        }, 0).toFixed(2),
+        costResults.startPointCosts.reduce((sum, cost) => {
+          const refCost = cost.child || cost.adult || cost.senior;
+          return sum + (refCost?.duration.travel || 0);
+        }, 0).toFixed(2),
+        costResults.startPointCosts.reduce((sum, cost) => {
+          const refCost = cost.child || cost.adult || cost.senior;
+          return sum + (refCost?.duration.appointment || 0);
+        }, 0).toFixed(2),
+        costResults.startPointCosts.reduce((sum, cost) => {
+          const refCost = cost.child || cost.adult || cost.senior;
+          return sum + (refCost?.duration.total || 0);
+        }, 0).toFixed(2),
         costResults.emissions.totalCO2.toFixed(2),
-        costResults.encounters.data.filter(enc => enc.ageGroup === '0-14').reduce((sum, enc) => sum + enc.encounters, 0),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(0), // Children no productivity loss
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.informalCaregiving),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.outOfPocket),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.child.costs.total),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.child),
-        costResults.encounters.data.filter(enc => enc.ageGroup === '15-64').reduce((sum, enc) => sum + enc.encounters, 0),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.lostProductivity),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.startPointCosts.reduce((sum, cost) => sum + cost.adult.costs.informalCaregiving, 0)),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.startPointCosts.reduce((sum, cost) => sum + cost.adult.costs.outOfPocket, 0)),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.adult.costs.total),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.adult),
-        costResults.encounters.data.filter(enc => enc.ageGroup === '65+').reduce((sum, enc) => sum + enc.encounters, 0),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(0), // Seniors no productivity loss
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.startPointCosts.reduce((sum, cost) => sum + cost.senior.costs.informalCaregiving, 0)),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.startPointCosts.reduce((sum, cost) => sum + cost.senior.costs.outOfPocket, 0)),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.senior.costs.total),
-        new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.senior),
+      ];
+      
+      // Add age group summary data only for selected groups
+      costResults.selectedAgeGroups.forEach(ageGroup => {
+        const ageLabel = ageGroup === '0-14' ? 'child' : ageGroup === '15-64' ? 'adult' : 'senior';
+        const ageData = costResults[ageLabel];
+        
+        if (ageData) {
+          const encounters = costResults.encounters.data
+            .filter(enc => enc.ageGroup === ageGroup)
+            .reduce((sum, enc) => sum + enc.encounters, 0);
+          
+          summaryRow.push(
+            encounters,
+            new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(ageData.costs.lostProductivity),
+            new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(ageData.costs.informalCaregiving),
+            new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(ageData.costs.outOfPocket),
+            new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(ageData.costs.total),
+            new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals[ageLabel])
+          );
+        } else {
+          summaryRow.push('', '', '', '', '', '');
+        }
+      });
+      
+      // Add grand total and other summary data - only include data for selected age groups
+      const referenceCost = costResults.child || costResults.adult || costResults.senior;
+      summaryRow.push(
         new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(costResults.totals.grand),
-        '', // Caregiver coefficients vary by age group
-        '',
-        '',
-        '', // Parking costs vary by HA
-        '', // Wage rate is constant
-        '', // Car cost is constant
-        '', // Meal cost is constant
-        '', // Accommodation cost is constant
-        ''  // Data usage cost is constant
-      ]);
+        costResults.selectedAgeGroups.includes('0-14') ? (costResults.child?.caregiverCoeff || '') : '',
+        costResults.selectedAgeGroups.includes('15-64') ? (costResults.adult?.caregiverCoeff || '') : '',
+        costResults.selectedAgeGroups.includes('65+') ? (costResults.senior?.caregiverCoeff || '') : '',
+        referenceCost?.costs.parking || '',
+        costParams.wage,
+        referenceCost?.costs.car || '',
+        referenceCost?.costs.meal || '',
+        referenceCost?.costs.accommodation || '',
+        referenceCost?.costs.dataUsage || ''
+      );
+      
+      rows.push(summaryRow);
 
       // Convert to CSV
       const csvContent = [headers, ...rows]
@@ -1978,9 +2116,23 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
       this.wage = 30.54;
       this.meal_cost = 15;
       this.accomm = 100;
-      this.car_cost = 0.48;
+      this.car_cost = 0.48; // Base car cost per km
       this.data_usage = 1.25;
-      this.co2_rate = 0.15; // kg/km
+      this.co2_rate = 0.15; // kg/km for car
+      
+      // Vehicle cost factors (multipliers for base car cost)
+      this.vehicleCostFactors = {
+        car: 1.0,    // Base cost
+        suv: 1.5,    // 50% more expensive than car
+        truck: 2.0   // 100% more expensive than car
+      };
+      
+      // Vehicle CO2 emission factors (multipliers for base car emissions)
+      this.vehicleCO2Factors = {
+        car: 1.0,    // Base emissions
+        suv: 1.8,    // 80% more emissions than car
+        truck: 2.5   // 150% more emissions than car
+      };
       
       // Service-specific constants
       this.fm_wait = 0.5;
@@ -2032,7 +2184,8 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
         duration = 0.25, // additional time in hours
         age = 40,
         ha_name = 'Vancouver Coastal',
-        service_type = 'MD'
+        service_type = 'MD',
+        vehicle_type = 'car' // Default to car
       } = params;
 
       const ageGroup = this.getAgeGroup(age);
@@ -2049,6 +2202,12 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
       
       // Get caregiver coefficient
       const caregiver_coeff = this.getCaregiverCoeff(ageGroup, service_type);
+
+      // Calculate vehicle-specific costs and emissions
+      const vehicleCostFactor = this.vehicleCostFactors[vehicle_type] || 1.0;
+      const vehicleCO2Factor = this.vehicleCO2Factors[vehicle_type] || 1.0;
+      const vehicle_cost_per_km = this.car_cost * vehicleCostFactor;
+      const vehicle_co2_per_km = this.co2_rate * vehicleCO2Factor;
 
       // Calculate subunit costs
       let subunit_LP = 0; // Lost Productivity
@@ -2071,24 +2230,25 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
 
       // Out of Pocket (varies by service type)
       if (service_type === 'MD') {
-        subunit_OOP = parking_cost + (street_distance * this.car_cost);
+        subunit_OOP = parking_cost + (street_distance * vehicle_cost_per_km);
       } else if (service_type === 'Virtual') {
         subunit_OOP = this.data_usage;
       } else {
         // Default for other service types
-        subunit_OOP = parking_cost + (street_distance * this.car_cost);
+        subunit_OOP = parking_cost + (street_distance * vehicle_cost_per_km);
       }
 
       // Total unit cost
       const unit_cost = subunit_IC + subunit_LP + subunit_OOP;
 
-      // CO2 emissions (round trip)
-      const co2_roundtrip = distance * this.co2_rate;
+      // CO2 emissions (round trip) - vehicle specific
+      const co2_roundtrip = distance * vehicle_co2_per_km;
 
       return {
         serviceType: service_type,
         ageGroup,
         healthAuthority: ha_name,
+        vehicleType: vehicle_type,
         distance: {
           oneWay: distance,
           roundTrip: street_distance
@@ -2107,14 +2267,16 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
         parameters: {
           wage: this.wage,
           parkingCost: parking_cost,
-          carCost: this.car_cost,
+          carCost: vehicle_cost_per_km,
+          vehicleCostFactor: vehicleCostFactor,
           caregiverCoeff: caregiver_coeff,
           mealCost: this.meal_cost,
           accommodation: this.accomm,
           dataUsage: this.data_usage
         },
         emissions: {
-          co2RoundTrip: co2_roundtrip
+          co2RoundTrip: co2_roundtrip,
+          co2Factor: vehicleCO2Factor
         },
         breakdown: {
           appointmentTime: appt_time,
@@ -3381,6 +3543,108 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
               </Grid>
             )}
 
+            {/* Age Group Selection */}
+            {showStartToLabsRoutes && startPointLabAnalysis.length > 0 && (
+              <Grid item xs={12}>
+                <Card sx={{ backgroundColor: safeColors.primary[400] }}>
+                  <CardContent>
+                    <Typography variant="h6" color="grey.100" mb={2} display="flex" alignItems="center">
+                      <FilterListIcon sx={{ mr: 1, color: safeColors.blueAccent[500] }} />
+                      Age Groups to Analyze
+                    </Typography>
+                    
+                    <FormGroup>
+                      {[
+                        { value: '0-14', label: 'Children (0-14)' },
+                        { value: '15-64', label: 'Adults (15-64)' },
+                        { value: '65+', label: 'Seniors (65+)' }
+                      ].map((ageGroup) => (
+                        <FormControlLabel
+                          key={ageGroup.value}
+                          control={
+                            <Checkbox
+                              checked={selectedAgeGroups.includes(ageGroup.value)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedAgeGroups([...selectedAgeGroups, ageGroup.value]);
+                                } else {
+                                  setSelectedAgeGroups(selectedAgeGroups.filter(ag => ag !== ageGroup.value));
+                                }
+                              }}
+                              sx={{
+                                color: safeColors.blueAccent[300],
+                                '&.Mui-checked': {
+                                  color: safeColors.blueAccent[500],
+                                },
+                              }}
+                            />
+                          }
+                          label={
+                            <Typography variant="body2" color="grey.300">
+                              {ageGroup.label}
+                            </Typography>
+                          }
+                        />
+                      ))}
+                    </FormGroup>
+                    
+                    <Typography variant="caption" color="grey.400" mt={1} display="block">
+                      Only selected age groups will be included in cost calculations and reports
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+            )}
+
+            {/* Vehicle Type Selection */}
+            {showStartToLabsRoutes && startPointLabAnalysis.length > 0 && (
+              <Grid item xs={12}>
+                <Card sx={{ backgroundColor: safeColors.primary[400] }}>
+                  <CardContent>
+                    <Typography variant="h6" color="grey.100" mb={2} display="flex" alignItems="center">
+                      <DirectionsIcon sx={{ mr: 1, color: safeColors.blueAccent[500] }} />
+                      Vehicle Type
+                    </Typography>
+                    
+                    <FormGroup>
+                      {[
+                        { value: 'car', label: 'Car', costFactor: 1.0 },
+                        { value: 'suv', label: 'SUV', costFactor: 1.5 },
+                        { value: 'truck', label: 'Truck', costFactor: 2.0 }
+                      ].map((vehicleType) => (
+                        <FormControlLabel
+                          key={vehicleType.value}
+                          control={
+                            <Checkbox
+                              checked={selectedVehicleType === vehicleType.value}
+                              onChange={(e) => {
+                                setSelectedVehicleType(vehicleType.value);
+                              }}
+                              sx={{
+                                color: safeColors.blueAccent[300],
+                                '&.Mui-checked': {
+                                  color: safeColors.blueAccent[500],
+                                },
+                              }}
+                            />
+                          }
+                          label={
+                            <Typography variant="body2" color="grey.300">
+                              {vehicleType.label} (Cost Factor: {vehicleType.costFactor}x)
+                            </Typography>
+                          }
+                        />
+                      ))}
+                    </FormGroup>
+                    
+                    <Typography variant="caption" color="grey.400" mt={1} display="block">
+                      Vehicle type affects fuel costs and CO2 emissions in calculations
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grid>
+            )}
+
             {/* Cost Calculation Section */}
             {showStartToLabsRoutes && startPointLabAnalysis.length > 0 && (
               <Grid item xs={12}>
@@ -3607,156 +3871,167 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
                         </Box>
 
                         {/* Cost Results by Age Group */}
-                        <Typography variant="h6" color="grey.100" mb={2}>
-                          Cost Breakdown by Age Group
-                        </Typography>
+                        <Box mb={2}>
+                          <Typography variant="h6" color="grey.100" mb={1}>
+                            Cost Breakdown by Age Group
+                          </Typography>
+                          <Typography variant="body2" color="grey.300" sx={{ fontStyle: 'italic' }}>
+                            Vehicle Type: {selectedVehicleType.toUpperCase()} (Cost Factor: {costResults.child?.parameters.vehicleCostFactor || 1.0}x, CO2 Factor: {costResults.child?.emissions.co2Factor || 1.0}x)
+                          </Typography>
+                        </Box>
                         <Grid container spacing={2}>
                           {/* Child (0-14) */}
-                          <Grid item xs={12} md={4}>
-                            <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #FF6B6B' }}>
-                              <Typography variant="h6" color="grey.100" mb={2} textAlign="center">
-                                Children (0-14)
-                              </Typography>
-                              <Box mb={2}>
-                                <Typography variant="h4" color="#FF6B6B" textAlign="center" fontWeight="bold">
-                                  {new Intl.NumberFormat('en-CA', {
-                                    style: 'currency',
-                                    currency: 'CAD',
-                                    minimumFractionDigits: 2
-                                  }).format(costResults.child.costs.total)}
+                          {selectedAgeGroups.includes('0-14') && costResults.child && (
+                            <Grid item xs={12} md={4}>
+                              <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #FF6B6B' }}>
+                                <Typography variant="h6" color="grey.100" mb={2} textAlign="center">
+                                  Children (0-14)
                                 </Typography>
-                                <Typography variant="body2" color="grey.300" textAlign="center">
-                                  per MD appointment
-                                </Typography>
-                              </Box>
-                              <Box>
-                                <Box display="flex" justifyContent="space-between" mb={1}>
-                                  <Typography variant="body2" color="grey.300">Lost Productivity:</Typography>
-                                  <Typography variant="body2" color="grey.100">$0.00</Typography>
-                                </Box>
-                                <Box display="flex" justifyContent="space-between" mb={1}>
-                                  <Typography variant="body2" color="grey.300">Informal Caregiving:</Typography>
-                                  <Typography variant="body2" color="grey.100">
+                                <Box mb={2}>
+                                  <Typography variant="h4" color="#FF6B6B" textAlign="center" fontWeight="bold">
                                     {new Intl.NumberFormat('en-CA', {
                                       style: 'currency',
                                       currency: 'CAD',
                                       minimumFractionDigits: 2
-                                    }).format(costResults.child.costs.informalCaregiving)}
+                                    }).format(costResults.child.costs.total)}
+                                  </Typography>
+                                  <Typography variant="body2" color="grey.300" textAlign="center">
+                                    per MD appointment
                                   </Typography>
                                 </Box>
-                                <Box display="flex" justifyContent="space-between">
-                                  <Typography variant="body2" color="grey.300">Out of Pocket:</Typography>
-                                  <Typography variant="body2" color="grey.100">
-                                    {new Intl.NumberFormat('en-CA', {
-                                      style: 'currency',
-                                      currency: 'CAD',
-                                      minimumFractionDigits: 2
-                                    }).format(costResults.child.costs.outOfPocket)}
-                                  </Typography>
+                                <Box>
+                                  <Box display="flex" justifyContent="space-between" mb={1}>
+                                    <Typography variant="body2" color="grey.300">Lost Productivity:</Typography>
+                                    <Typography variant="body2" color="grey.100">$0.00</Typography>
+                                  </Box>
+                                  <Box display="flex" justifyContent="space-between" mb={1}>
+                                    <Typography variant="body2" color="grey.300">Informal Caregiving:</Typography>
+                                    <Typography variant="body2" color="grey.100">
+                                      {new Intl.NumberFormat('en-CA', {
+                                        style: 'currency',
+                                        currency: 'CAD',
+                                        minimumFractionDigits: 2
+                                      }).format(costResults.child.costs.informalCaregiving)}
+                                    </Typography>
+                                  </Box>
+                                  <Box display="flex" justifyContent="space-between">
+                                    <Typography variant="body2" color="grey.300">Out of Pocket:</Typography>
+                                    <Typography variant="body2" color="grey.100">
+                                      {new Intl.NumberFormat('en-CA', {
+                                        style: 'currency',
+                                        currency: 'CAD',
+                                        minimumFractionDigits: 2
+                                      }).format(costResults.child.costs.outOfPocket)}
+                                    </Typography>
+                                  </Box>
                                 </Box>
-                              </Box>
-                            </Paper>
-                          </Grid>
+                              </Paper>
+                            </Grid>
+                          )}
 
                           {/* Adult (15-64) */}
-                          <Grid item xs={12} md={4}>
-                            <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #4CAF50' }}>
-                              <Typography variant="h6" color="grey.100" mb={2} textAlign="center">
-                                Working Age (15-64)
-                              </Typography>
-                              <Box mb={2}>
-                                <Typography variant="h4" color="#4CAF50" textAlign="center" fontWeight="bold">
-                                  {new Intl.NumberFormat('en-CA', {
-                                    style: 'currency',
-                                    currency: 'CAD',
-                                    minimumFractionDigits: 2
-                                  }).format(costResults.adult.costs.total)}
+                          {selectedAgeGroups.includes('15-64') && costResults.adult && (
+                            <Grid item xs={12} md={4}>
+                              <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #4CAF50' }}>
+                                <Typography variant="h6" color="grey.100" mb={2} textAlign="center">
+                                  Working Age (15-64)
                                 </Typography>
-                                <Typography variant="body2" color="grey.300" textAlign="center">
-                                  per MD appointment
-                                </Typography>
-                              </Box>
-                              <Box>
-                                <Box display="flex" justifyContent="space-between" mb={1}>
-                                  <Typography variant="body2" color="grey.300">Lost Productivity:</Typography>
-                                  <Typography variant="body2" color="grey.100">
+                                <Box mb={2}>
+                                  <Typography variant="h4" color="#4CAF50" textAlign="center" fontWeight="bold">
                                     {new Intl.NumberFormat('en-CA', {
                                       style: 'currency',
                                       currency: 'CAD',
                                       minimumFractionDigits: 2
-                                    }).format(costResults.adult.costs.lostProductivity)}
+                                    }).format(costResults.adult.costs.total)}
+                                  </Typography>
+                                  <Typography variant="body2" color="grey.300" textAlign="center">
+                                    per MD appointment
                                   </Typography>
                                 </Box>
-                                <Box display="flex" justifyContent="space-between" mb={1}>
-                                  <Typography variant="body2" color="grey.300">Informal Caregiving:</Typography>
-                                  <Typography variant="body2" color="grey.100">
-                                    {new Intl.NumberFormat('en-CA', {
-                                      style: 'currency',
-                                      currency: 'CAD',
-                                      minimumFractionDigits: 2
-                                    }).format(costResults.adult.costs.informalCaregiving)}
-                                  </Typography>
+                                <Box>
+                                  <Box display="flex" justifyContent="space-between" mb={1}>
+                                    <Typography variant="body2" color="grey.300">Lost Productivity:</Typography>
+                                    <Typography variant="body2" color="grey.100">
+                                      {new Intl.NumberFormat('en-CA', {
+                                        style: 'currency',
+                                        currency: 'CAD',
+                                        minimumFractionDigits: 2
+                                      }).format(costResults.adult.costs.lostProductivity)}
+                                    </Typography>
+                                  </Box>
+                                  <Box display="flex" justifyContent="space-between" mb={1}>
+                                    <Typography variant="body2" color="grey.300">Informal Caregiving:</Typography>
+                                    <Typography variant="body2" color="grey.100">
+                                      {new Intl.NumberFormat('en-CA', {
+                                        style: 'currency',
+                                        currency: 'CAD',
+                                        minimumFractionDigits: 2
+                                      }).format(costResults.adult.costs.informalCaregiving)}
+                                    </Typography>
+                                  </Box>
+                                  <Box display="flex" justifyContent="space-between">
+                                    <Typography variant="body2" color="grey.300">Out of Pocket:</Typography>
+                                    <Typography variant="body2" color="grey.100">
+                                      {new Intl.NumberFormat('en-CA', {
+                                        style: 'currency',
+                                        currency: 'CAD',
+                                        minimumFractionDigits: 2
+                                      }).format(costResults.adult.costs.outOfPocket)}
+                                    </Typography>
+                                  </Box>
                                 </Box>
-                                <Box display="flex" justifyContent="space-between">
-                                  <Typography variant="body2" color="grey.300">Out of Pocket:</Typography>
-                                  <Typography variant="body2" color="grey.100">
-                                    {new Intl.NumberFormat('en-CA', {
-                                      style: 'currency',
-                                      currency: 'CAD',
-                                      minimumFractionDigits: 2
-                                    }).format(costResults.adult.costs.outOfPocket)}
-                                  </Typography>
-                                </Box>
-                              </Box>
-                            </Paper>
-                          </Grid>
+                              </Paper>
+                            </Grid>
+                          )}
 
                           {/* Senior (65+) */}
-                          <Grid item xs={12} md={4}>
-                            <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #2196F3' }}>
-                              <Typography variant="h6" color="grey.100" mb={2} textAlign="center">
-                                Seniors (65+)
-                              </Typography>
-                              <Box mb={2}>
-                                <Typography variant="h4" color="#2196F3" textAlign="center" fontWeight="bold">
-                                  {new Intl.NumberFormat('en-CA', {
-                                    style: 'currency',
-                                    currency: 'CAD',
-                                    minimumFractionDigits: 2
-                                  }).format(costResults.senior.costs.total)}
+                          {selectedAgeGroups.includes('65+') && costResults.senior && (
+                            <Grid item xs={12} md={4}>
+                              <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #2196F3' }}>
+                                <Typography variant="h6" color="grey.100" mb={2} textAlign="center">
+                                  Seniors (65+)
                                 </Typography>
-                                <Typography variant="body2" color="grey.300" textAlign="center">
-                                  per MD appointment
-                                </Typography>
-                              </Box>
-                              <Box>
-                                <Box display="flex" justifyContent="space-between" mb={1}>
-                                  <Typography variant="body2" color="grey.300">Lost Productivity:</Typography>
-                                  <Typography variant="body2" color="grey.100">$0.00</Typography>
-                                </Box>
-                                <Box display="flex" justifyContent="space-between" mb={1}>
-                                  <Typography variant="body2" color="grey.300">Informal Caregiving:</Typography>
-                                  <Typography variant="body2" color="grey.100">
+                                <Box mb={2}>
+                                  <Typography variant="h4" color="#2196F3" textAlign="center" fontWeight="bold">
                                     {new Intl.NumberFormat('en-CA', {
                                       style: 'currency',
                                       currency: 'CAD',
                                       minimumFractionDigits: 2
-                                    }).format(costResults.senior.costs.informalCaregiving)}
+                                    }).format(costResults.senior.costs.total)}
+                                  </Typography>
+                                  <Typography variant="body2" color="grey.300" textAlign="center">
+                                    per MD appointment
                                   </Typography>
                                 </Box>
-                                <Box display="flex" justifyContent="space-between">
-                                  <Typography variant="body2" color="grey.300">Out of Pocket:</Typography>
-                                  <Typography variant="body2" color="grey.100">
-                                    {new Intl.NumberFormat('en-CA', {
-                                      style: 'currency',
-                                      currency: 'CAD',
-                                      minimumFractionDigits: 2
-                                    }).format(costResults.senior.costs.outOfPocket)}
-                                  </Typography>
+                                <Box>
+                                  <Box display="flex" justifyContent="space-between" mb={1}>
+                                    <Typography variant="body2" color="grey.300">Lost Productivity:</Typography>
+                                    <Typography variant="body2" color="grey.100">$0.00</Typography>
+                                  </Box>
+                                  <Box display="flex" justifyContent="space-between" mb={1}>
+                                    <Typography variant="body2" color="grey.300">Informal Caregiving:</Typography>
+                                    <Typography variant="body2" color="grey.100">
+                                      {new Intl.NumberFormat('en-CA', {
+                                        style: 'currency',
+                                        currency: 'CAD',
+                                        minimumFractionDigits: 2
+                                      }).format(costResults.senior.costs.informalCaregiving)}
+                                    </Typography>
+                                  </Box>
+                                  <Box display="flex" justifyContent="space-between">
+                                    <Typography variant="body2" color="grey.300">Out of Pocket:</Typography>
+                                    <Typography variant="body2" color="grey.100">
+                                      {new Intl.NumberFormat('en-CA', {
+                                        style: 'currency',
+                                        currency: 'CAD',
+                                        minimumFractionDigits: 2
+                                      }).format(costResults.senior.costs.outOfPocket)}
+                                    </Typography>
+                                  </Box>
                                 </Box>
-                              </Box>
-                            </Paper>
-                          </Grid>
+                              </Paper>
+                            </Grid>
+                          )}
                         </Grid>
 
                         {/* CO2 Emissions Summary */}
@@ -3799,61 +4074,67 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
                           </Typography>
                           <Grid container spacing={2}>
                             {/* Child Total */}
-                            <Grid item xs={12} md={4}>
-                              <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #FF6B6B' }}>
-                                <Typography variant="h6" color="grey.100" mb={1} textAlign="center">
-                                  Children (0-14)
-                                </Typography>
-                                <Typography variant="h3" color="#FF6B6B" textAlign="center" fontWeight="bold">
-                                  {new Intl.NumberFormat('en-CA', {
-                                    style: 'currency',
-                                    currency: 'CAD',
-                                    minimumFractionDigits: 2
-                                  }).format(costResults.totals.child)}
-                                </Typography>
-                                <Typography variant="body2" color="grey.300" textAlign="center">
-                                  total for all start points
-                                </Typography>
-                              </Paper>
-                            </Grid>
+                            {selectedAgeGroups.includes('0-14') && (
+                              <Grid item xs={12} md={4}>
+                                <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #FF6B6B' }}>
+                                  <Typography variant="h6" color="grey.100" mb={1} textAlign="center">
+                                    Children (0-14)
+                                  </Typography>
+                                  <Typography variant="h3" color="#FF6B6B" textAlign="center" fontWeight="bold">
+                                    {new Intl.NumberFormat('en-CA', {
+                                      style: 'currency',
+                                      currency: 'CAD',
+                                      minimumFractionDigits: 2
+                                    }).format(costResults.totals.child)}
+                                  </Typography>
+                                  <Typography variant="body2" color="grey.300" textAlign="center">
+                                    total for all start points
+                                  </Typography>
+                                </Paper>
+                              </Grid>
+                            )}
 
                             {/* Adult Total */}
-                            <Grid item xs={12} md={4}>
-                              <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #4CAF50' }}>
-                                <Typography variant="h6" color="grey.100" mb={1} textAlign="center">
-                                  Working Age (15-64)
-                                </Typography>
-                                <Typography variant="h3" color="#4CAF50" textAlign="center" fontWeight="bold">
-                                  {new Intl.NumberFormat('en-CA', {
-                                    style: 'currency',
-                                    currency: 'CAD',
-                                    minimumFractionDigits: 2
-                                  }).format(costResults.totals.adult)}
-                                </Typography>
-                                <Typography variant="body2" color="grey.300" textAlign="center">
-                                  total for all start points
-                                </Typography>
-                              </Paper>
-                            </Grid>
+                            {selectedAgeGroups.includes('15-64') && (
+                              <Grid item xs={12} md={4}>
+                                <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #4CAF50' }}>
+                                  <Typography variant="h6" color="grey.100" mb={1} textAlign="center">
+                                    Working Age (15-64)
+                                  </Typography>
+                                  <Typography variant="h3" color="#4CAF50" textAlign="center" fontWeight="bold">
+                                    {new Intl.NumberFormat('en-CA', {
+                                      style: 'currency',
+                                      currency: 'CAD',
+                                      minimumFractionDigits: 2
+                                    }).format(costResults.totals.adult)}
+                                  </Typography>
+                                  <Typography variant="body2" color="grey.300" textAlign="center">
+                                    total for all start points
+                                  </Typography>
+                                </Paper>
+                              </Grid>
+                            )}
 
                             {/* Senior Total */}
-                            <Grid item xs={12} md={4}>
-                              <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #2196F3' }}>
-                                <Typography variant="h6" color="grey.100" mb={1} textAlign="center">
-                                  Seniors (65+)
-                                </Typography>
-                                <Typography variant="h3" color="#2196F3" textAlign="center" fontWeight="bold">
-                                  {new Intl.NumberFormat('en-CA', {
-                                    style: 'currency',
-                                    currency: 'CAD',
-                                    minimumFractionDigits: 2
-                                  }).format(costResults.totals.senior)}
-                                </Typography>
-                                <Typography variant="body2" color="grey.300" textAlign="center">
-                                  total for all start points
-                                </Typography>
-                              </Paper>
-                            </Grid>
+                            {selectedAgeGroups.includes('65+') && (
+                              <Grid item xs={12} md={4}>
+                                <Paper sx={{ p: 2, backgroundColor: safeColors.primary[600], border: '2px solid #2196F3' }}>
+                                  <Typography variant="h6" color="grey.100" mb={1} textAlign="center">
+                                    Seniors (65+)
+                                  </Typography>
+                                  <Typography variant="h3" color="#2196F3" textAlign="center" fontWeight="bold">
+                                    {new Intl.NumberFormat('en-CA', {
+                                      style: 'currency',
+                                      currency: 'CAD',
+                                      minimumFractionDigits: 2
+                                    }).format(costResults.totals.senior)}
+                                  </Typography>
+                                  <Typography variant="body2" color="grey.300" textAlign="center">
+                                    total for all start points
+                                  </Typography>
+                                </Paper>
+                              </Grid>
+                            )}
                           </Grid>
                         </Box>
 
@@ -3861,7 +4142,7 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
                         <Box mt={3}>
                           <Paper sx={{ p: 3, backgroundColor: safeColors.primary[600], border: '3px solid #FFD700' }}>
                             <Typography variant="h5" color="grey.100" mb={2} textAlign="center" fontWeight="bold">
-                              Grand Total for All Age Groups
+                              Grand Total for Selected Age Groups
                             </Typography>
                             <Typography variant="h2" color="#FFD700" textAlign="center" fontWeight="bold">
                               {new Intl.NumberFormat('en-CA', {
@@ -3871,7 +4152,7 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
                               }).format(costResults.totals.grand)}
                             </Typography>
                             <Typography variant="body1" color="grey.300" textAlign="center" mb={3}>
-                              Total cost for all {costResults.summary.totalStartPoints} start points across all age groups
+                              Total cost for all {costResults.summary.totalStartPoints} start points across {selectedAgeGroups.length} selected age group{selectedAgeGroups.length !== 1 ? 's' : ''} ({selectedAgeGroups.join(', ')}) using {selectedVehicleType.toUpperCase()}
                             </Typography>
                             
                             {/* Subunit Totals */}
@@ -3889,7 +4170,7 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
                                     }).format(costResults.totals.lostProductivity)}
                                   </Typography>
                                   <Typography variant="body2" color="grey.300">
-                                    Working age only
+                                    {selectedAgeGroups.includes('15-64') ? 'Working age only' : 'No working age selected'}
                                   </Typography>
                                 </Box>
                               </Grid>
@@ -3906,7 +4187,7 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
                                     }).format(costResults.totals.informalCaregiving)}
                                   </Typography>
                                   <Typography variant="body2" color="grey.300">
-                                    All age groups
+                                    Selected age groups
                                   </Typography>
                                 </Box>
                               </Grid>
@@ -3923,7 +4204,7 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
                                     }).format(costResults.totals.outOfPocket)}
                                   </Typography>
                                   <Typography variant="body2" color="grey.300">
-                                    All age groups
+                                    Selected age groups
                                   </Typography>
                                 </Box>
                               </Grid>
@@ -3952,16 +4233,27 @@ Generated by GEOFFE Dashboard - Custom Map Analysis Tool
                             <Grid item xs={6} md={3}>
                               <Typography variant="body2" color="grey.300">Cost Range:</Typography>
                               <Typography variant="h6" color="grey.100">
-                                {new Intl.NumberFormat('en-CA', {
-                                  style: 'currency',
-                                  currency: 'CAD',
-                                  minimumFractionDigits: 2
-                                }).format(Math.min(costResults.child.costs.total, costResults.adult.costs.total, costResults.senior.costs.total))} - 
-                                {new Intl.NumberFormat('en-CA', {
-                                  style: 'currency',
-                                  currency: 'CAD',
-                                  minimumFractionDigits: 2
-                                }).format(Math.max(costResults.child.costs.total, costResults.adult.costs.total, costResults.senior.costs.total))}
+                                {(() => {
+                                  const costs = [];
+                                  if (costResults.child) costs.push(costResults.child.costs.total);
+                                  if (costResults.adult) costs.push(costResults.adult.costs.total);
+                                  if (costResults.senior) costs.push(costResults.senior.costs.total);
+                                  
+                                  if (costs.length === 0) return 'N/A';
+                                  
+                                  const minCost = Math.min(...costs);
+                                  const maxCost = Math.max(...costs);
+                                  
+                                  return `${new Intl.NumberFormat('en-CA', {
+                                    style: 'currency',
+                                    currency: 'CAD',
+                                    minimumFractionDigits: 2
+                                  }).format(minCost)} - ${new Intl.NumberFormat('en-CA', {
+                                    style: 'currency',
+                                    currency: 'CAD',
+                                    minimumFractionDigits: 2
+                                  }).format(maxCost)}`;
+                                })()}
                               </Typography>
                             </Grid>
                             {costResults.encounters.hasData && (
